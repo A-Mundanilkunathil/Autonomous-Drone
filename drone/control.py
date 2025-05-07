@@ -1,68 +1,138 @@
-from sense_hat import SenseHat
 import asyncio
-import RPI.GPIO as GPIO # pip install RPI.GPIO
+from hardware import MotorController, SensorController
 
-sense = SenseHat()
-
-# Set up GPIO pins
-MOTOR_PINS = [17, 18, 27, 22]  # Example GPIO pins for motors
-
-def setup_gpio():
-    GPIO.setmode(GPIO.BCM) # Use BCM pin numbering
-    for pin in MOTOR_PINS:
-        GPIO.setup(pin, GPIO.OUT)  # Set motor pins as output
-        GPIO.output(pin, GPIO.LOW)  # Initialize motors to off
+class DroneController:
+    def __init__(self):
+        self.motor_controller = MotorController()
+        self.sensor_controller = SensorController()
+        self.is_flying = False
+        self.hover_speed = 30  # Base hover speed (%)
+        self.motors = None
     
-    # Create PWM instances for each motor
-    motor_pwm = [GPIO.PWM(pin, 50) for pin in MOTOR_PINS] # 50Hz frequency
-    return motor_pwm
-
-async def takeoff():
-    # Set up GPIO
-    motors = setup_gpio()  
-    
-    print("Taking off...")
-    
-    # Initialize motors to off
-    for motor in motors:
-        motor.start(0) # Start PWM with 0% duty cycle (off)
+    async def takeoff(self):
+        print("Taking off...")
         
-    # Gradually increase speed to takeoff
-    for speed in range(0, 40, 5): # 0% to 40% power
-        for motor in motors:
-            motor.ChangeDutyCycle(speed)
-        await asyncio.sleep(0.5)
+        # Setup and start motors
+        self.motors = self.motor_controller.setup()
+        self.motor_controller.start_motors(0)
         
-    await asyncio.sleep(2)  # Simulate takeoff duration
-    print("Drone has taken off!")
+        # Gradually increase speed to takeoff
+        for speed in range(0, self.hover_speed + 10, 5):
+            self.motor_controller.set_speeds([speed] * 4)
+            await asyncio.sleep(0.5)
+        
+        # Stabilize at hover speed
+        self.motor_controller.set_speeds([self.hover_speed] * 4)
+        await asyncio.sleep(2)
+        
+        self.is_flying = True
+        print("Drone has taken off!")
+        return self.motors
     
-    return motors
-
-async def land(motors):
-    print("Landing...")
+    async def land(self):
+        if not self.is_flying:
+            print("Drone is not flying")
+            return
+            
+        print("Landing...")
+        
+        # Gradually decrease speed
+        for speed in range(self.hover_speed, -1, -5):
+            self.motor_controller.set_speeds([speed] * 4)
+            await asyncio.sleep(0.5)
+        
+        # Stop motors and clean up
+        self.motor_controller.stop_motors()
+        self.motor_controller.cleanup()
+        
+        self.is_flying = False
+        print("Drone has landed safely")
     
-    # Gradually decrease speed
-    for speed in range(40, -1, -5): # 40% down to 0%
-        for motor in motors:
-            motor.ChangeDutyCycle(speed)
-        await asyncio.sleep(0.5)
+    async def move_forward(self, duration=1.0, speed_delta=10):
+        if not self.is_flying:
+            return
+            
+        print("Moving forward")
+        # Tilt forward by adjusting motor speeds
+        speeds = [
+            self.hover_speed - speed_delta,  # Front-left lower
+            self.hover_speed - speed_delta,  # Front-right lower
+            self.hover_speed + speed_delta,  # Back-left higher
+            self.hover_speed + speed_delta   # Back-right higher
+        ]
+        self.motor_controller.set_speeds(speeds)
         
-    # Stop motors
-    for motor in motors:
-        motor.stop()
+        await asyncio.sleep(duration)
         
-    # Clean up GPIO
-    GPIO.cleanup()
-    print("Drone has landed and GPIO cleaned up.")
-        
-async def main():
-    motors = await takeoff()
-    await asyncio.sleep(5)  # Simulate flight duration
-    await land(motors)
+        # Return to hover
+        self.motor_controller.set_speeds([self.hover_speed] * 4)
     
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        GPIO.cleanup()  # Clean up GPIO on exit
-        print("Program interrupted. GPIO cleaned up.")
+    async def move_backward(self, duration=1.0, speed_delta=10):
+        if not self.is_flying:
+            return
+            
+        print("Moving backward")
+        # Tilt backward by adjusting motor speeds
+        speeds = [
+            self.hover_speed + speed_delta,  # Front-left higher
+            self.hover_speed + speed_delta,  # Front-right higher
+            self.hover_speed - speed_delta,  # Back-left lower
+            self.hover_speed - speed_delta   # Back-right lower
+        ]
+        self.motor_controller.set_speeds(speeds)
+        
+        await asyncio.sleep(duration)
+        
+        # Return to hover
+        self.motor_controller.set_speeds([self.hover_speed] * 4)
+    
+    async def move_left(self, duration=1.0, speed_delta=10):
+        if not self.is_flying:
+            return
+            
+        print("Moving left")
+        # Tilt left by adjusting motor speeds
+        speeds = [
+            self.hover_speed - speed_delta,  # Front-left lower
+            self.hover_speed + speed_delta,  # Front-right higher
+            self.hover_speed + speed_delta,  # Back-left higher
+            self.hover_speed - speed_delta   # Back-right lower
+        ]
+        self.motor_controller.set_speeds(speeds)
+        
+        await asyncio.sleep(duration)
+        
+        # Return to hover
+        self.motor_controller.set_speeds([self.hover_speed] * 4)
+    
+    async def move_right(self, duration=1.0, speed_delta=10):
+        if not self.is_flying:
+            return
+            
+        print("Moving right")
+        # Tilt right by adjusting motor speeds
+        speeds = [
+            self.hover_speed + speed_delta,  # Front-left higher
+            self.hover_speed - speed_delta,  # Front-right lower
+            self.hover_speed - speed_delta,  # Back-left lower
+            self.hover_speed + speed_delta   # Back-right higher
+        ]
+        self.motor_controller.set_speeds(speeds)
+        
+        await asyncio.sleep(duration)
+        
+        # Return to hover
+        self.motor_controller.set_speeds([self.hover_speed] * 4)
+    
+    async def hover(self):
+        if not self.is_flying:
+            return
+            
+        print("Hovering")
+        self.motor_controller.set_speeds([self.hover_speed] * 4)
+    
+    def emergency_stop(self):
+        print("EMERGENCY STOP")
+        self.motor_controller.stop_motors()
+        self.motor_controller.cleanup()
+        self.is_flying = False

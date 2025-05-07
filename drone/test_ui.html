@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+                <html>
+                <head>
+                    <title>Drone Control</title>
+                    <meta name="viewport" content="width=device-width, initial-scale=1">
+                    <style>
+                        body { margin: 0; padding: 0; font-family: Arial, sans-serif; background: #222; color: white; }
+                        .container { display: flex; flex-direction: column; height: 100vh; }
+                        .video-container { flex: 1; display: flex; justify-content: center; align-items: center; 
+                                         background: #111; overflow: hidden; }
+                        .video-feed { max-width: 100%; max-height: 80vh; }
+                        .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 10px; 
+                                  background: #333; }
+                        button { padding: 15px; border: none; border-radius: 5px; background: #555; color: white; 
+                                font-size: 16px; cursor: pointer; }
+                        button:hover { background: #666; }
+                        button:active { background: #777; }
+                        #forward { grid-column: 2; }
+                        #left { grid-column: 1; grid-row: 2; }
+                        #stop { grid-column: 2; grid-row: 2; background: #888; }
+                        #right { grid-column: 3; grid-row: 2; }
+                        #backward { grid-column: 2; grid-row: 3; }
+                        .action-buttons { grid-column: span 3; display: flex; justify-content: space-around; 
+                                        margin-top: 10px; }
+                        .takeoff { background: #4CAF50; }
+                        .land { background: #f44336; }
+                        .status { padding: 10px; background: #444; margin-bottom: 10px; border-radius: 4px; }
+                    </style>
+                </head>
+                <body>
+                    <div class="container">
+                        <div class="video-container">
+                            <img class="video-feed" src="{{ url_for('video_feed') }}" alt="Drone Camera">
+                        </div>
+                        
+                        <div class="status" id="status">Status: Ready</div>
+                        
+                        <div class="controls">
+                            <button id="forward" onmousedown="sendCommand('forward')" onmouseup="sendCommand('hover')"
+                                  ontouchstart="sendCommand('forward')" ontouchend="sendCommand('hover')">Forward</button>
+                            <button id="left" onmousedown="sendCommand('left')" onmouseup="sendCommand('hover')"
+                                  ontouchstart="sendCommand('left')" ontouchend="sendCommand('hover')">Left</button>
+                            <button id="stop" onclick="sendCommand('hover')">Hover</button>
+                            <button id="right" onmousedown="sendCommand('right')" onmouseup="sendCommand('hover')"
+                                  ontouchstart="sendCommand('right')" ontouchend="sendCommand('hover')">Right</button>
+                            <button id="backward" onmousedown="sendCommand('backward')" onmouseup="sendCommand('hover')"
+                                  ontouchstart="sendCommand('backward')" ontouchend="sendCommand('hover')">Backward</button>
+                            
+                            <div class="action-buttons">
+                                <button class="takeoff" onclick="sendCommand('takeoff')">TAKE OFF</button>
+                                <button onclick="sendCommand('photo')">PHOTO</button>
+                                <button class="land" onclick="sendCommand('land')">LAND</button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <script>
+                        function sendCommand(command) {
+                            fetch('/control', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ command: command })
+                            })
+                            .then(response => response.json())
+                            .then(data => {
+                                document.getElementById('status').textContent = 'Status: ' + data.status;
+                            })
+                            .catch(error => {
+                                console.error('Error:', error);
+                                document.getElementById('status').textContent = 'Status: Error';
+                            });
+                        }
+                        
+                        // Add keyboard controls
+                        document.addEventListener('keydown', (e) => {
+                            if (e.repeat) return;
+                            
+                            switch(e.key) {
+                                case 'ArrowUp': sendCommand('forward'); break;
+                                case 'ArrowDown': sendCommand('backward'); break;
+                                case 'ArrowLeft': sendCommand('left'); break;
+                                case 'ArrowRight': sendCommand('right'); break;
+                                case ' ': sendCommand('hover'); break;
+                                case 't': sendCommand('takeoff'); break;
+                                case 'l': sendCommand('land'); break;
+                                case 'p': sendCommand('photo'); break;
+                            }
+                        });
+                        
+                        document.addEventListener('keyup', (e) => {
+                            if(['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+                                sendCommand('hover');
+                            }
+                        });
+                    </script>
+                </body>
+                </html>
