@@ -108,7 +108,7 @@ void startCameraServer() {
 
 void setup() {
   Serial.begin(115200);
-  Serial2.begin(9600, SERIAL_8N1, UART_TX_PIN, UART_RX_PIN);
+  Serial2.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
 
   pinMode(LED_GPIO, OUTPUT);
   digitalWrite(LED_GPIO, LOW); // Make sure LED is off at start
