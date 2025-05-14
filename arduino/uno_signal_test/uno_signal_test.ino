@@ -1,62 +1,77 @@
-#include <Servo.h>
-#include <NeoSWSerial.h>  // Include NeoSWSerial library
+#include <WiFi.h>
 
-// Create a NeoSWSerial object for communication with ESP32
-NeoSWSerial espSerial(8, 9);  // RX on pin 8, TX on pin 9
+#define WIFI_SSID "YOUR_SSID"         // ✅ Replace with your Wi-Fi SSID
+#define WIFI_PASSWORD "YOUR_PASSWORD" // ✅ Replace with your Wi-Fi Password
 
-Servo esc1, esc2, esc3, esc4;
-
-int currentSpeed = 0;
-int targetSpeed = 0;
-int stepSize = 100;
-int delayBetweenSteps = 20;
-int maxSpeed = 2000;
-int minSpeed = 700;
+#define LED_PIN 33 // Adjust if your ESP32 uses a different onboard LED GPIO
 
 void setup() {
-  Serial.begin(9600);         // USB debug
-  espSerial.begin(9600);      // UART from ESP32 (TX to pin 9, RX to pin 8)
+  Serial.begin(115200);
+  delay(1000);
+  Serial.println("\n[BOOT] Starting ESP32 Wi-Fi Diagnostic...");
 
-  esc1.attach(3);  // Pin 3 for Servo 1
-  esc2.attach(5);  // Pin 5 for Servo 2 (avoid pins conflicting with NeoSWSerial)
-  esc3.attach(6);  // Pin 6 for Servo 3
-  esc4.attach(10); // Pin 10 for Servo 4
+  // Step 1: Scan for available networks
+  Serial.println("[SCAN] Scanning for Wi-Fi networks...");
+  int networkCount = WiFi.scanNetworks();
 
-  setESCs(currentSpeed);
-  Serial.println("Arduino Uno listening via NeoSWSerial...");
-}
-
-void loop() {
-  // Check if data is available on NeoSWSerial
-  while (espSerial.available() >= 1) {
-    uint16_t inputSpeed = espSerial.read();
-    inputSpeed |= (espSerial.read() << 8);
-
-    if (inputSpeed >= minSpeed && inputSpeed <= maxSpeed) {
-      targetSpeed = inputSpeed;
-      Serial.print("Target speed: ");
-      Serial.println(targetSpeed);
-    } else {
-      Serial.print("Invalid speed: ");
-      Serial.println(inputSpeed);
+  if (networkCount == 0) {
+    Serial.println("[FAIL] No Wi-Fi networks found. Check antenna or hardware.");
+    return;
+  } else {
+    Serial.printf("[INFO] Found %d Wi-Fi networks.\n", networkCount);
+    for (int i = 0; i < networkCount; ++i) {
+      Serial.printf("  %d: %s (RSSI: %d, Encryption: %s)\n",
+        i + 1,
+        WiFi.SSID(i).c_str(),
+        WiFi.RSSI(i),
+        WiFi.encryptionType(i) == WIFI_AUTH_OPEN ? "Open" : "Secured");
     }
   }
 
-  if (currentSpeed < targetSpeed) {
-    currentSpeed += stepSize;
-    if (currentSpeed > targetSpeed) currentSpeed = targetSpeed;
-  } else if (currentSpeed > targetSpeed) {
-    currentSpeed -= stepSize;
-    if (currentSpeed < targetSpeed) currentSpeed = targetSpeed;
+  // Step 2: Set station mode
+  if (!WiFi.mode(WIFI_STA)) {
+    Serial.println("[FAIL] Could not set WiFi mode to STA.");
+    return;
   }
 
-  setESCs(currentSpeed);
-  delay(delayBetweenSteps);
+  // Step 3: Connect to Wi-Fi
+  Serial.printf("[CONNECT] Connecting to \"%s\"...\n", WIFI_SSID);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+
+  delay(2000); // Let Wi-Fi stack do its thing
+
+  wl_status_t status = WiFi.status();
+
+  if (status != WL_CONNECTED) {
+    Serial.printf("[FAIL] Connection failed with status: %d\n", status);
+    switch (status) {
+      case WL_NO_SSID_AVAIL: Serial.println("[REASON] SSID not found."); break;
+      case WL_CONNECT_FAILED: Serial.println("[REASON] Wrong password or no response."); break;
+      case WL_DISCONNECTED: Serial.println("[REASON] Module is disconnected."); break;
+      default: Serial.println("[REASON] Unknown failure."); break;
+    }
+    return;
+  }
+
+  Serial.println("[SUCCESS] Connected to Wi-Fi.");
+  Serial.print("[INFO] IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // Step 4: Peripheral setup - LED test
+  Serial.println("[SETUP] Running LED blink test...");
+  pinMode(LED_PIN, OUTPUT);
+  for (int i = 0; i < 5; ++i) {
+    digitalWrite(LED_PIN, HIGH);
+    delay(300);
+    digitalWrite(LED_PIN, LOW);
+    delay(300);
+  }
+
+  Serial.println("[DONE] Setup complete. Entering loop.");
 }
 
-void setESCs(int speed) {
-  esc1.writeMicroseconds(speed);
-  esc2.writeMicroseconds(speed);
-  esc3.writeMicroseconds(speed);
-  esc4.writeMicroseconds(speed);
+void loop() {
+  // You can add additional diagnostics or background tasks here.
+  delay(2000);
+  Serial.println("[LOOP] Still running...");
 }
