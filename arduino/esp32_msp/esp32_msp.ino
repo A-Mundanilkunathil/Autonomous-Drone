@@ -57,6 +57,11 @@ uint16_t rc[8] = {1000, 1500, 1500, 1500, 1000, 1000, 1000, 1000};
 // Camera status
 bool cameraWorking = false;
 
+// Task handle for camera task
+TaskHandle_t cameraTaskHandle = NULL;
+camera_fb_t* volatile currentFrame = NULL;
+SemaphoreHandle_t frameMutex = NULL;
+
 
 /**
  * Generates an HTML page as a string for the drone camera controller interface.
@@ -382,12 +387,12 @@ bool initializeCamera() {
   config.pin_reset    = RESET_GPIO_NUM;
   
   // Adjust camera settings for better stability
-  config.xclk_freq_hz = 20000000;  // Reduced frequency for stability
+  config.xclk_freq_hz = 16000000;  // Reduced frequency for stability
   config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_LATEST; // Use latest frame grab mode
-  config.frame_size = FRAMESIZE_QVGA;  // Start with small frame
-  config.jpeg_quality = 25;  // Lower number = better quality
-  config.fb_count = 1;  // Use single frame buffer for lower memory usage
+  config.frame_size = FRAMESIZE_VGA;  // Start with small frame
+  config.jpeg_quality = 63;  // Lower number = better quality
+  config.fb_count = 2;  // Use single frame buffer for lower memory usage
   config.fb_location = CAMERA_FB_IN_PSRAM;
 
   // Power cycle the camera if PWDN pin is defined
@@ -406,38 +411,6 @@ bool initializeCamera() {
     return false;
   }
 
-  // Get camera sensor
-  sensor_t * s = esp_camera_sensor_get();
-  if (s == NULL) {
-    Serial.println("❌ Failed to get camera sensor");
-    esp_camera_deinit();
-    return false;
-  }
-
-  // Set camera sensor settings
-  s->set_brightness(s, 0);     // -2 to 2
-  s->set_contrast(s, 0);       // -2 to 2
-  s->set_saturation(s, 0);     // -2 to 2
-  s->set_special_effect(s, 0); // 0 to 6 (0 - No Effect, 1 - Negative, 2 - Grayscale, 3 - Red Tint, 4 - Green Tint, 5 - Blue Tint, 6 - Sepia)
-  s->set_whitebal(s, 1);       // 0 = disable , 1 = enable
-  s->set_awb_gain(s, 1);       // 0 = disable , 1 = enable
-  s->set_wb_mode(s, 0);        // 0 to 4 - if awb_gain enabled (0 - Auto, 1 - Sunny, 2 - Cloudy, 3 - Office, 4 - Home)
-  s->set_exposure_ctrl(s, 1);  // 0 = disable , 1 = enable
-  s->set_aec2(s, 0);           // 0 = disable , 1 = enable
-  s->set_ae_level(s, 0);       // -2 to 2
-  s->set_aec_value(s, 300);    // 0 to 1200
-  s->set_gain_ctrl(s, 1);      // 0 = disable , 1 = enable
-  s->set_agc_gain(s, 0);       // 0 to 30
-  s->set_gainceiling(s, (gainceiling_t)0);  // 0 to 6
-  s->set_bpc(s, 0);            // 0 = disable , 1 = enable
-  s->set_wpc(s, 1);            // 0 = disable , 1 = enable
-  s->set_raw_gma(s, 1);        // 0 = disable , 1 = enable
-  s->set_lenc(s, 1);           // 0 = disable , 1 = enable
-  s->set_hmirror(s, 0);        // 0 = disable , 1 = enable
-  s->set_vflip(s, 0);          // 0 = disable , 1 = enable
-  s->set_dcw(s, 1);            // 0 = disable , 1 = enable
-  s->set_colorbar(s, 0);       // 0 = disable , 1 = enable
-
   // Test capture
   camera_fb_t *fb = esp_camera_fb_get();
   if (fb) {
@@ -451,7 +424,6 @@ bool initializeCamera() {
     return false;
   }
 }
-
 
 /**
  * @brief Handle a HTTP request for the camera stream.
@@ -551,7 +523,7 @@ void handleStream(AsyncWebServerRequest *request) {
   response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   response->addHeader("Pragma", "no-cache");
   response->addHeader("Expires", "0");
-  response->addHeader("Buffer-Size", "65536");  // Larger chunks = faster streaming
+  response->addHeader("Buffer-Size", "131072");  // Increase from 65536 to 128KB
   
   request->send(response);
   Serial.println("📹 Stream started");
@@ -575,6 +547,8 @@ void setup() {
   }
 
   // WiFi setup
+  WiFi.setSleep(false); // Disable WiFi sleep mode
+  WiFi.setTxPower(WIFI_POWER_19_5dBm); // Set max TX power for better range
   WiFi.begin(ssid, password);
   Serial.print("🔌 Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
@@ -806,6 +780,18 @@ void setup() {
   Serial.println("📊 Status: http://" + WiFi.localIP().toString() + "/status");
   
   sendMSP();
+  
+  // Create camera task
+  frameMutex = xSemaphoreCreateMutex();
+  xTaskCreatePinnedToCore(
+    cameraTask,
+    "CameraTask",
+    4096,
+    NULL,
+    2,
+    &cameraTaskHandle,
+    0  // Run on Core 0 (WiFi/BT runs on Core 0, Arduino runs on Core 1)
+  );
 }
 
 void loop() {
@@ -881,4 +867,34 @@ void loop() {
   }
   
   delay(10);
+}
+
+/**
+ * @brief Task function for continuous camera capture.
+ * 
+ * This function runs in a loop and captures frames from the camera at a
+ * target rate of ~33 frames per second. It uses a mutex to protect access
+ * to the shared currentFrame variable, ensuring that the latest frame is
+ * always available for streaming. Older frames are returned to the camera
+ * driver for reuse. The task runs on Core 0 of the ESP32, separate from
+ * the main Arduino loop.
+ * 
+ * @param parameter Task parameter (not used).
+ */
+void cameraTask(void *parameter) {
+  for(;;) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (fb) {
+      if (xSemaphoreTake(frameMutex, portMAX_DELAY)) {
+        if (currentFrame) {
+          esp_camera_fb_return(currentFrame);
+        }
+        currentFrame = fb;
+        xSemaphoreGive(frameMutex);
+      } else {
+        esp_camera_fb_return(fb);
+      }
+    }
+    delay(30);  // ~33 fps target rate
+  }
 }
