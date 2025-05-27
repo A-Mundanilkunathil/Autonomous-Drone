@@ -11,7 +11,7 @@ aruco_dict = aruco.Dictionary_get(aruco.DICT_4X4_50)
 parameters = aruco.DetectorParameters_create()
 marker_length = 0.15 # Marker length in meters
 
-cap = cv2.VideoCapture("http://192.168.4.1:81/stream")
+cap = cv2.VideoCapture("http://192.168.1.156/stream")
 
 while True:
     ret, frame = cap.read()

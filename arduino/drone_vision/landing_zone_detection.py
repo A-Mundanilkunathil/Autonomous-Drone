@@ -3,7 +3,7 @@ import numpy as np
 import requests
 
 # MJPEG stream from ESP32-CAM
-url = 'http://192.168.4.1/stream' # Adjust IP address as needed
+url = 'http://192.168.1.156/stream' # Adjust IP address as needed
 cap = cv2.VideoCapture(url)
 
 # Load predefined dictionary
@@ -20,7 +20,7 @@ camera_matrix = np.array([
 dist_coeffs = np.zeros((5,1)) # Assuming no lens distortion
 
 def send_command(cmd):
-    requests.get(f"http://192.168.4.1/cmd?val={cmd}")
+    requests.get(f"http://192.168.1.156/cmd?val={cmd}")
     
 while True:
     ret, frame = cap.read()

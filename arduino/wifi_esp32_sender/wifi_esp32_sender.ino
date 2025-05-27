@@ -1,15 +1,14 @@
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WebServer.h>
-#include "esp_http_server.h"
 
-// CAMERA MODEL: AI-THINKER
-#define CAMERA_MODEL_AI_THINKER
+// Camera pin config for ESP32-CAM AI-Thinker
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
 #define SIOD_GPIO_NUM     26
 #define SIOC_GPIO_NUM     27
+
 #define Y9_GPIO_NUM       35
 #define Y8_GPIO_NUM       34
 #define Y7_GPIO_NUM       39
@@ -21,152 +20,274 @@
 #define VSYNC_GPIO_NUM    25
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
+#define LED_GPIO 33  // LED pin
 
-#define UART_TX_PIN 14
-#define UART_RX_PIN -1
+const char* ssid = "HP";     // Replace with your WiFi SSID
+const char* password = "4085948901"; // Replace with your WiFi password
 
-#define LED_GPIO 33  // ✅ LED pin
-
-uint16_t testSpeed = 1500;
-
-const char* ssid = "HP";
-const char* password = "4085948901";
 WebServer server(80);
 
-void sendSpeedToUno(uint16_t speed) {
-  Serial2.write(speed & 0xFF);
-  Serial2.write((speed >> 8) & 0xFF);
-  Serial.printf("Sent speed %d to Uno\n", speed);
-}
-
-void handleRoot() {
-  String html = "<html><body><h2>Set Motor Speed</h2>"
-                "<form action='/set' method='get'>"
-                "Speed (700-2000): <input type='number' name='v' min='700' max='2000'><br><br>"
-                "<input type='submit' value='Send'></form>"
-                "<br><h3>Live Stream</h3>"
-                "<img src='http://" + WiFi.localIP().toString() + ":81/stream' width='320'></body></html>";
-  server.send(200, "text/html", html);
-}
-
-void handleSpeed() {
-  if (server.hasArg("v")) {
-    int val = server.arg("v").toInt();
-    if (val >= 700 && val <= 2000) {
-      testSpeed = val;
-      sendSpeedToUno(testSpeed);
-      digitalWrite(LED_GPIO, HIGH);  // 🔴 LED ON
-      delay(200);                    // 🔴 Short blink
-      digitalWrite(LED_GPIO, LOW);   // 🔴 LED OFF
-      server.send(200, "text/plain", "Speed set to: " + String(testSpeed));
-      return;
+String htmlPage = R"rawliteral(
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Drone Cam Control</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background-color: #f2f2f2;
+      text-align: center;
+      margin: 0;
+      padding: 20px;
     }
-  }
-  server.send(400, "text/plain", "Invalid speed. Must be 700–2000.");
-}
 
-httpd_handle_t stream_httpd = NULL;
-
-esp_err_t stream_handler(httpd_req_t *req) {
-  camera_fb_t *fb;
-  esp_err_t res = httpd_resp_set_type(req, "multipart/x-mixed-replace;boundary=frame");
-  if (res != ESP_OK) return res;
-
-  while (true) {
-    fb = esp_camera_fb_get();
-    if (!fb) return ESP_FAIL;
-
-    res = httpd_resp_send_chunk(req, "--frame\r\n", strlen("--frame\r\n"));
-    if (res == ESP_OK) {
-      char buf[64];
-      size_t hlen = snprintf(buf, sizeof(buf),
-        "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n", fb->len);
-      res = httpd_resp_send_chunk(req, buf, hlen);
+    h2 {
+      margin-bottom: 10px;
     }
-    if (res == ESP_OK) res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
 
+    .video-feed {
+      margin: 0 auto 20px;
+      border: 4px solid #444;
+      border-radius: 10px;
+      overflow: hidden;
+      max-width: 360px;
+    }
+
+    img {
+      width: 100%;
+      height: auto;
+    }
+
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      max-width: 360px;
+      margin: 0 auto;
+    }
+
+    .controls button {
+      padding: 12px;
+      font-size: 18px;
+      border: none;
+      border-radius: 10px;
+      background-color: #2196f3;
+      color: white;
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+    }
+
+    .controls button:hover {
+      background-color: #1976d2;
+    }
+
+    .controls .emergency {
+      grid-column: span 3;
+      background-color: #f44336;
+    }
+
+    .controls .emergency:hover {
+      background-color: #d32f2f;
+    }
+  </style>
+</head>
+<body>
+
+  <h2>🚁 Drone Controller</h2>
+
+  <div class="video-feed">
+    <img src="/stream" alt="Drone Camera Feed">
+  </div>
+
+  <div class="controls">
+    <button onclick="send('w')">⬆️</button>
+    <button onclick="send('r')">➕ Speed</button>
+    <button onclick="send('s')">⬇️</button>
+
+    <button onclick="send('a')">⬅️</button>
+    <button onclick="send('f')">➖ Speed</button>
+    <button onclick="send('d')">➡️</button>
+
+    <button class="emergency" onclick="send('x')">🛑 EMERGENCY STOP</button>
+  </div>
+
+  <!-- Joystick Container -->
+  <div id="joystick-zone" style="width:200px;height:200px;margin:20px auto;"></div>
+
+  <!-- Include nipple.js -->
+  <script src="https://cdn.jsdelivr.net/npm/nipplejs@0.9.0/dist/nipplejs.min.js"></script>
+
+  <script>
+    function send(cmd) {
+      fetch(`/cmd?val=${cmd}`);
+    }
+    
+    // Initialize the joystick
+    const joystick = nipplejs.create({
+        zone: document.getElementById('joystick-zone'),
+        mode: 'static',
+        position: { left: '50%', top: '50%' },
+        color: 'blue',
+        size: 150
+    });
+
+    let lastDir = ''; // Variable to store the last direction
+
+    // Event listeners for joystick movements
+    joystick.on('dir', function (evt, data) {
+        // Check if the joystick is moved in a direction
+        if (data.direction && data.direction.angle !== lastDir) {
+            lastDir = data.direction.angle; // Update the last direction
+            let cmd = '';
+
+            switch (data.direction.angle) {
+                case 'up': cmd = 'w'; break;
+                case 'down': cmd = 's'; break;
+                case 'left': cmd = 'a'; break;
+                case 'right': cmd = 'd'; break;
+            }
+            if (cmd) send(cmd);
+        }
+    });
+
+    // Event listener for joystick release
+    joystick.on('end', function () {
+        lastDir = '';
+    });
+
+  </script>
+
+</body>
+</html>
+)rawliteral";
+
+// Camera stream handler
+void handleStream() {
+  WiFiClient client = server.client();
+  String response = "HTTP/1.1 200 OK\r\nContent-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
+  server.sendContent(response);
+
+  while (1) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) break;
+
+    response = "--frame\r\nContent-Type: image/jpeg\r\n\r\n";
+    server.sendContent(response);
+    server.sendContent((const char*)fb->buf, fb->len);
+    server.sendContent("\r\n");
     esp_camera_fb_return(fb);
-    if (res != ESP_OK) break;
+
+    if (!client.connected()) break;
   }
-  return res;
 }
 
-void startCameraServer() {
-  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.server_port = 81;
+// Command handler
+void handleCommand() {
+  String cmd = server.arg("val");
+  Serial.write(cmd[0]); // Send to Arduino Nano via UART
 
-  httpd_uri_t stream_uri = {
-    .uri       = "/stream",
-    .method    = HTTP_GET,
-    .handler   = stream_handler,
-    .user_ctx  = NULL
-  };
-  if (httpd_start(&stream_httpd, &config) == ESP_OK) {
-    httpd_register_uri_handler(stream_httpd, &stream_uri);
-  }
+  // Blink LED
+  digitalWrite(LED_GPIO, HIGH);
+  delay(100);
+  digitalWrite(LED_GPIO, LOW);
+  
+  server.send(200, "text/plain", "OK");
 }
 
 void setup() {
-  Serial.begin(115200);
-  Serial2.begin(9600, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+  Serial.begin(9600); // UART to Nano
 
-  pinMode(LED_GPIO, OUTPUT);
+  pinMode(LED_GPIO, OUTPUT); // LED pin
   digitalWrite(LED_GPIO, LOW); // Make sure LED is off at start
 
+  // Camera init
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
-  config.ledc_timer = LEDC_TIMER_0;
-  config.pin_d0 = Y2_GPIO_NUM;
-  config.pin_d1 = Y3_GPIO_NUM;
-  config.pin_d2 = Y4_GPIO_NUM;
-  config.pin_d3 = Y5_GPIO_NUM;
-  config.pin_d4 = Y6_GPIO_NUM;
-  config.pin_d5 = Y7_GPIO_NUM;
-  config.pin_d6 = Y8_GPIO_NUM;
-  config.pin_d7 = Y9_GPIO_NUM;
-  config.pin_xclk = XCLK_GPIO_NUM;
-  config.pin_pclk = PCLK_GPIO_NUM;
-  config.pin_vsync = VSYNC_GPIO_NUM;
-  config.pin_href = HREF_GPIO_NUM;
-  config.pin_sccb_sda = SIOD_GPIO_NUM;
-  config.pin_sccb_scl = SIOC_GPIO_NUM;
-  config.pin_pwdn = PWDN_GPIO_NUM;
-  config.pin_reset = RESET_GPIO_NUM;
+  config.ledc_timer   = LEDC_TIMER_0;
+  config.pin_d0       = Y2_GPIO_NUM;
+  config.pin_d1       = Y3_GPIO_NUM;
+  config.pin_d2       = Y4_GPIO_NUM;
+  config.pin_d3       = Y5_GPIO_NUM;
+  config.pin_d4       = Y6_GPIO_NUM;
+  config.pin_d5       = Y7_GPIO_NUM;
+  config.pin_d6       = Y8_GPIO_NUM;
+  config.pin_d7       = Y9_GPIO_NUM;
+  config.pin_xclk     = XCLK_GPIO_NUM;
+  config.pin_pclk     = PCLK_GPIO_NUM;
+  config.pin_vsync    = VSYNC_GPIO_NUM;
+  config.pin_href     = HREF_GPIO_NUM;
+  config.pin_sscb_sda = SIOD_GPIO_NUM;
+  config.pin_sscb_scl = SIOC_GPIO_NUM;
+  config.pin_pwdn     = PWDN_GPIO_NUM;
+  config.pin_reset    = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
-  config.frame_size = FRAMESIZE_QVGA;
-  config.jpeg_quality = 15;
-  config.fb_count = 2;
-  config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.grab_mode = CAMERA_GRAB_LATEST;
 
-  if (esp_camera_init(&config) != ESP_OK) {
+  config.frame_size = FRAMESIZE_QVGA;
+  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.jpeg_quality = 12;
+  config.fb_count = 2;
+
+  if (!esp_camera_init(&config)) {
+    Serial.println("Camera init success");
+  } else {
     Serial.println("Camera init failed");
     return;
   }
 
+  Serial.println();
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  
   WiFi.begin(ssid, password);
-  WiFi.setSleep(false);
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
+  
+  // Add LED blink while connecting
+  int connectionAttempts = 0;
+  while (WiFi.status() != WL_CONNECTED && connectionAttempts < 20) { // 20 * 500ms = 10 second timeout
+    digitalWrite(LED_GPIO, !digitalRead(LED_GPIO)); // Toggle LED
     delay(500);
     Serial.print(".");
+    connectionAttempts++;
+  }
+  digitalWrite(LED_GPIO, LOW); // LED off
+  
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println();
+    Serial.println("WiFi connected!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    
+    // Optional: Flash LED to indicate successful connection
+    for (int i = 0; i < 3; i++) {
+      digitalWrite(LED_GPIO, HIGH);
+      delay(100);
+      digitalWrite(LED_GPIO, LOW);
+      delay(100);
+    }
+  } else {
+    Serial.println();
+    Serial.println("WiFi connection failed. Check credentials or network availability.");
   }
 
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("\nWiFi connected.");
-    Serial.println(WiFi.localIP());
-    startCameraServer();
-    server.on("/", handleRoot);
-    server.on("/set", handleSpeed);
-    server.begin();
-    Serial.println("Web interface ready.");
-  } else {
-    Serial.println("WiFi failed. Restarting...");
-    ESP.restart();
-  }
+  // Web server routes
+  server.on("/", []() {
+    server.send(200, "text/html", htmlPage);
+  });
+
+  server.on("/cmd", handleCommand);
+  server.on("/stream", handleStream);
+
+  server.begin();
+  Serial.println("Web server started");
 }
 
 void loop() {
   server.handleClient();
+  
+  // Optional: Check WiFi connection and reconnect if needed
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi disconnected. Attempting to reconnect...");
+    WiFi.reconnect();
+  }
 }
