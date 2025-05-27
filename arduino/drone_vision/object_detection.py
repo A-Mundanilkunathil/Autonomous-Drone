@@ -3,6 +3,7 @@ import numpy as np
 import requests
 import json
 import time
+import dlib 
 
 # ESP32-CAM stream URL (update with your ESP32 IP)
 STREAM_URL = "http://192.168.1.156/stream"  # Change to your ESP32 IP
@@ -44,12 +45,23 @@ def send_drone_command(action):
         return False
 
 def detect_faces(frame):
-    """Detect faces using OpenCV Haar Cascades"""
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+    """Enhanced face detection using dlib"""
+    # Resize frame for faster processing (optional)
+    small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
+    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+    
+    # Use dlib's face detector - much more accurate than Haar cascades
+    detector = dlib.get_frontal_face_detector()
+    faces = detector(rgb_frame, 1)  # The 1 means upsample once for better detection
     
     detected_objects = []
-    for (x, y, w, h) in faces:
+    for face in faces:
+        # Convert coordinates back to original frame size
+        x = face.left() * 2
+        y = face.top() * 2
+        w = (face.right() - face.left()) * 2
+        h = (face.bottom() - face.top()) * 2
+        
         detected_objects.append({
             'label': 'face',
             'confidence': 1.0,
@@ -58,46 +70,68 @@ def detect_faces(frame):
         })
         
         # Draw face detection
-        cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.putText(frame, 'Face', (x, y - 10), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-        
-        # Detect eyes within face
-        roi_gray = gray[y:y+h, x:x+w]
-        eyes = eye_cascade.detectMultiScale(roi_gray)
-        for (ex, ey, ew, eh) in eyes:
-            cv2.rectangle(frame, (x + ex, y + ey), (x + ex + ew, y + ey + eh), (0, 255, 0), 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
     
     return detected_objects
 
+# Replace motion detection function
 def detect_motion(frame):
-    """Detect motion using background subtraction"""
-    fg_mask = bg_subtractor.apply(frame)
+    """Improved motion detection with better filtering"""
+    # First, resize frame for faster processing (optional)
+    frame_resized = cv2.resize(frame, (320, 240))
+    
+    # Apply Gaussian blur to reduce noise
+    frame_blur = cv2.GaussianBlur(frame_resized, (5, 5), 0)
+    
+    # Apply background subtraction
+    fg_mask = bg_subtractor.apply(frame_blur, learningRate=0.01)
+    
+    # Remove shadows (values of 127) from the mask
+    _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
     
     # Remove noise
     kernel = np.ones((5,5), np.uint8)
-    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_OPEN, kernel)
-    fg_mask = cv2.morphologyEx(fg_mask, cv2.MORPH_CLOSE, kernel)
+    fg_mask = cv2.erode(fg_mask, kernel, iterations=1)
+    fg_mask = cv2.dilate(fg_mask, kernel, iterations=2)
     
     # Find contours
     contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
+    # Adjust scale factor to match original frame size
+    scale_x = frame.shape[1] / frame_resized.shape[1]
+    scale_y = frame.shape[0] / frame_resized.shape[0]
+    
     detected_objects = []
     for contour in contours:
         area = cv2.contourArea(contour)
-        if area > 1000:  # Minimum area threshold
+        if area > 500:  # Reduced threshold for better detection
             x, y, w, h = cv2.boundingRect(contour)
-            detected_objects.append({
-                'label': 'motion',
-                'confidence': 1.0,
-                'bbox': (x, y, w, h),
-                'center': (x + w//2, y + h//2)
-            })
             
-            # Draw motion detection
-            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 255), 2)
-            cv2.putText(frame, 'Motion', (x, y - 10), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            # Scale back to original frame size
+            x, y = int(x * scale_x), int(y * scale_y)
+            w, h = int(w * scale_x), int(h * scale_y)
+            
+            # Filter out very small detections
+            if w > 20 and h > 20:
+                detected_objects.append({
+                    'label': 'motion',
+                    'confidence': min(area / 10000, 1.0),  # Normalize confidence
+                    'bbox': (x, y, w, h),
+                    'center': (x + w//2, y + h//2)
+                })
+                
+                # Draw motion detection with confidence
+                conf = min(area / 10000, 1.0)
+                color = (0, int(255 * conf), 255)  # Brighter green = higher confidence
+                cv2.rectangle(frame, (x, y), (x + w, y + h), color, 2)
+                cv2.putText(frame, f'Motion {conf:.2f}', (x, y - 10), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    
+    # Display the processed mask in a corner for debugging
+    small_mask = cv2.resize(fg_mask, (160, 120))
+    frame[10:130, 10:170] = cv2.cvtColor(small_mask, cv2.COLOR_GRAY2BGR)
     
     return detected_objects
 
@@ -231,6 +265,10 @@ def create_dummy_frame():
 
 def main():
     """Main detection loop"""
+    # Initialize background subtractor with better parameters
+    global bg_subtractor
+    bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=16, detectShadows=True)
+
     print("🔍 Checking ESP32 camera status...")
     camera_available = check_stream_availability()
     
@@ -257,6 +295,7 @@ def main():
     detection_mode = 1  # Start with face detection
     cv_mode_active = False
     frame_count = 0
+    reset_interval = 500  # Reset every 500 frames
     
     while True:
         if cap and cap.isOpened():
