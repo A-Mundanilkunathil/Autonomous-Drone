@@ -9,10 +9,6 @@ import dlib
 STREAM_URL = "http://192.168.1.156/stream"  # Change to your ESP32 IP
 DRONE_API_URL = "http://192.168.1.156/cv/action"  # CV API endpoint
 
-# Initialize face detection (built into OpenCV)
-face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
-eye_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_eye.xml')
-
 # Motion detection setup
 bg_subtractor = cv2.createBackgroundSubtractorMOG2()
 
@@ -46,14 +42,15 @@ def send_drone_command(action):
 
 def detect_faces(frame):
     """Enhanced face detection using dlib"""
-    # Resize frame for faster processing (optional)
-    small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5)
-    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+    # Resize frame for faster processing
+    small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) # Reduce size for faster processing
+    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB) # Convert to RGB for dlib
     
-    # Use dlib's face detector - much more accurate than Haar cascades
-    detector = dlib.get_frontal_face_detector()
-    faces = detector(rgb_frame, 1)  # The 1 means upsample once for better detection
+    # Initialize dlib face detector
+    detector = dlib.get_frontal_face_detector() # Create a face detector instance
+    faces = detector(rgb_frame, 1)  # Detect faces with a scale factor of 1 for better accuracy
     
+    # Scale back the coordinates to match original frame size
     detected_objects = []
     for face in faces:
         # Convert coordinates back to original frame size
@@ -62,7 +59,7 @@ def detect_faces(frame):
         w = (face.right() - face.left()) * 2
         h = (face.bottom() - face.top()) * 2
         
-        detected_objects.append({
+        detected_objects.append({ 
             'label': 'face',
             'confidence': 1.0,
             'bbox': (x, y, w, h),
@@ -76,10 +73,9 @@ def detect_faces(frame):
     
     return detected_objects
 
-# Replace motion detection function
 def detect_motion(frame):
     """Improved motion detection with better filtering"""
-    # First, resize frame for faster processing (optional)
+    # First, resize frame for faster processing 
     frame_resized = cv2.resize(frame, (320, 240))
     
     # Apply Gaussian blur to reduce noise
@@ -92,9 +88,9 @@ def detect_motion(frame):
     _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
     
     # Remove noise
-    kernel = np.ones((5,5), np.uint8)
-    fg_mask = cv2.erode(fg_mask, kernel, iterations=1)
-    fg_mask = cv2.dilate(fg_mask, kernel, iterations=2)
+    kernel = np.ones((5,5), np.uint8) # Create a kernel for morphological operations
+    fg_mask = cv2.erode(fg_mask, kernel, iterations=1) # Erode to remove small noise
+    fg_mask = cv2.dilate(fg_mask, kernel, iterations=2) # Dilate to fill gaps
     
     # Find contours
     contours, _ = cv2.findContours(fg_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -105,9 +101,10 @@ def detect_motion(frame):
     
     detected_objects = []
     for contour in contours:
-        area = cv2.contourArea(contour)
+        area = cv2.contourArea(contour) # Calculate area of the contour
+        
         if area > 500:  # Reduced threshold for better detection
-            x, y, w, h = cv2.boundingRect(contour)
+            x, y, w, h = cv2.boundingRect(contour) # Get bounding rectangle
             
             # Scale back to original frame size
             x, y = int(x * scale_x), int(y * scale_y)
@@ -275,7 +272,16 @@ def main():
     if camera_available:
         print("✅ Camera is available - Starting stream...")
         cap = cv2.VideoCapture(STREAM_URL)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Reduce buffer to minimize latency
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  
+        cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 5000)  # 5 second connection timeout
+        cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 5000)  # 5 second read timeout
+        
+        # Force a read with timeout to verify connection
+        has_frame, _ = cap.read()
+        if not has_frame:
+            print("❌ Could not retrieve frame from camera")
+            cap.release()
+            cap = None
     else:
         print("❌ Camera not available - Running in control-only mode")
         cap = None
@@ -317,6 +323,12 @@ def main():
             frame = create_dummy_frame()
         
         frame_count += 1
+        
+        # Reset background subtractor periodically to avoid ghost tracking
+        if frame_count % reset_interval == 0:
+            print("🔄 Resetting background model")
+            bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=16, detectShadows=True)
+        
         height, width = frame.shape[:2]
         frame_center = (width // 2, height // 2)
         

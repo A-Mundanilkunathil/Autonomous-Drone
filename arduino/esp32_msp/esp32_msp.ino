@@ -27,8 +27,8 @@
 HardwareSerial FCSerial(1);
 
 // WiFi credentials
-const char* ssid = "";
-const char* password = "";
+const char* ssid = "HP";
+const char* password = "4085948901";
 
 AsyncWebServer server(80); // Create web server on port 80
 
@@ -356,6 +356,9 @@ bool initializeCamera() {
   // Deinitialize camera first if it was previously initialized
   esp_camera_deinit();
   delay(100);
+
+  // Maximum CPU speed for better processing
+  setCpuFrequencyMhz(240);
   
   // Camera configuration for ESP32-CAM AI-Thinker
   camera_config_t config;
@@ -379,14 +382,13 @@ bool initializeCamera() {
   config.pin_reset    = RESET_GPIO_NUM;
   
   // Adjust camera settings for better stability
-  config.xclk_freq_hz = 10000000;  // Reduced frequency for stability
+  config.xclk_freq_hz = 20000000;  // Reduced frequency for stability
   config.pixel_format = PIXFORMAT_JPEG;
-  config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;  // Changed grab mode
+  config.grab_mode = CAMERA_GRAB_LATEST; // Use latest frame grab mode
   config.frame_size = FRAMESIZE_QVGA;  // Start with small frame
-  config.jpeg_quality = 12;  // Lower number = better quality
-  config.fb_count = 1;  // Single frame buffer for stability
+  config.jpeg_quality = 25;  // Lower number = better quality
+  config.fb_count = 1;  // Use single frame buffer for lower memory usage
   config.fb_location = CAMERA_FB_IN_PSRAM;
-  config.grab_mode = CAMERA_GRAB_LATEST;
 
   // Power cycle the camera if PWDN pin is defined
   if (PWDN_GPIO_NUM != -1) {
@@ -475,6 +477,8 @@ void handleStream(AsyncWebServerRequest *request) {
     return;
   }
 
+  setCpuFrequencyMhz(240); // Max CPU speed during streaming
+
   // Start chunked response for streaming
   AsyncWebServerResponse *response = request->beginChunkedResponse(
     "multipart/x-mixed-replace; boundary=frame",
@@ -547,6 +551,7 @@ void handleStream(AsyncWebServerRequest *request) {
   response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
   response->addHeader("Pragma", "no-cache");
   response->addHeader("Expires", "0");
+  response->addHeader("Buffer-Size", "65536");  // Larger chunks = faster streaming
   
   request->send(response);
   Serial.println("📹 Stream started");
