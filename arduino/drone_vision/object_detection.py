@@ -12,6 +12,12 @@ DRONE_API_URL = "http://192.168.1.156/cv/action"  # CV API endpoint
 # Motion detection setup
 bg_subtractor = cv2.createBackgroundSubtractorMOG2()
 
+# Load Haar Cascade for face detection
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+
+# Variable to store previous frame for optical flow
+prev_frame = None
+
 def check_stream_availability():
     """Check if the stream is available"""
     try:
@@ -41,27 +47,32 @@ def send_drone_command(action):
         return False
 
 def detect_faces(frame):
-    """Enhanced face detection using dlib"""
-    # Resize frame for faster processing
-    small_frame = cv2.resize(frame, (0, 0), fx=0.5, fy=0.5) # Reduce size for faster processing
-    rgb_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB) # Convert to RGB for dlib
+    """Fast face detection using OpenCV's Haar Cascade"""
+    # Convert to grayscale for faster processing
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
-    # Initialize dlib face detector
-    detector = dlib.get_frontal_face_detector() # Create a face detector instance
-    faces = detector(rgb_frame, 1)  # Detect faces with a scale factor of 1 for better accuracy
+    # Resize for even faster processing
+    small_gray = cv2.resize(gray, (0, 0), fx=0.5, fy=0.5)
     
-    # Scale back the coordinates to match original frame size
+    # Detect faces - adjust parameters for speed vs accuracy tradeoff
+    # minSize limits minimum face size to detect (faster)
+    # scaleFactor impacts detection across different sizes
+    faces = face_cascade.detectMultiScale(
+        small_gray, 
+        scaleFactor=1.1, 
+        minNeighbors=3,
+        minSize=(20, 20),
+        flags=cv2.CASCADE_SCALE_IMAGE
+    )
+    
     detected_objects = []
-    for face in faces:
-        # Convert coordinates back to original frame size
-        x = face.left() * 2
-        y = face.top() * 2
-        w = (face.right() - face.left()) * 2
-        h = (face.bottom() - face.top()) * 2
+    for (x, y, w, h) in faces:
+        # Scale coordinates back to original frame size
+        x, y, w, h = x*2, y*2, w*2, h*2
         
         detected_objects.append({ 
             'label': 'face',
-            'confidence': 1.0,
+            'confidence': 1.0,  # Haar doesn't provide confidence
             'bbox': (x, y, w, h),
             'center': (x + w//2, y + h//2)
         })
@@ -69,7 +80,75 @@ def detect_faces(frame):
         # Draw face detection
         cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
         cv2.putText(frame, 'Face', (x, y - 10), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+    
+    return detected_objects
+
+def detect_with_optical_flow(prev_frame, current_frame):
+    """Track movement using optical flow"""
+    # Convert frames to grayscale
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+    
+    # Calculate optical flow
+    flow = cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    
+    # Visualize the flow
+    magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
+    hsv = np.zeros_like(current_frame)
+    hsv[..., 1] = 255
+    hsv[..., 0] = angle * 180 / np.pi / 2
+    hsv[..., 2] = cv2.normalize(magnitude, None, 0, 255, cv2.NORM_MINMAX)
+    flow_rgb = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    
+    # Show flow visualization
+    small_flow = cv2.resize(flow_rgb, (160, 120))
+    current_frame[10:130, 170:330] = small_flow
+    
+    # Analyze flow magnitude for movement detection
+    avg_magnitude = np.mean(magnitude)
+    movement_direction = None
+    
+    detected_objects = []
+    
+    # Only detect significant movement
+    if avg_magnitude > 2.0:  
+        # Calculate dominant direction
+        h, w = magnitude.shape
+        regions = {
+            "left": np.mean(magnitude[:, :w//3]),
+            "center": np.mean(magnitude[:, w//3:2*w//3]),
+            "right": np.mean(magnitude[:, 2*w//3:])
+        }
+        movement_direction = max(regions, key=regions.get)
+        
+        # Create a "detected object" for the area with most movement
+        region_x = 0
+        if movement_direction == "center":
+            region_x = w//3
+        elif movement_direction == "right":
+            region_x = 2*w//3
+            
+        # Create bounding box for movement region
+        x, y = region_x, 0
+        w = w//3
+        h = h
+        
+        detected_objects.append({
+            'label': f'flow_{movement_direction}',
+            'confidence': min(avg_magnitude / 10.0, 1.0),
+            'bbox': (x, y, w, h),
+            'center': (x + w//2, y + h//2)
+        })
+        
+        # Draw movement detection
+        cv2.rectangle(current_frame, (x, y), (x + w, y + h), (0, 165, 255), 2)
+        cv2.putText(current_frame, f'Flow: {movement_direction}', (x, y - 10),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+    
+    # Add text showing average magnitude
+    cv2.putText(current_frame, f"Movement: {avg_magnitude:.2f}", (170, 150),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
     
     return detected_objects
 
@@ -293,6 +372,7 @@ def main():
     print("   '2' - Motion detection")
     print("   '3' - Color detection")
     print("   '4' - Edge/Contour detection")
+    print("   '5' - Optical Flow Detection")
     print("   's' - Start/Stop CV mode")
     print("   'h' - Hover")
     print("   'l' - Land")
@@ -353,6 +433,13 @@ def main():
             elif detection_mode == 4:
                 detected_objects = detect_edges_contours(frame)
                 mode_name = "Edge Detection"
+            elif detection_mode == 5:
+                if prev_frame is not None:
+                    detected_objects = detect_with_optical_flow(prev_frame, frame)
+                    mode_name = "Optical Flow"
+                else:
+                    detected_objects = []
+                prev_frame = frame.copy()  # Store current frame for next iteration
             else:
                 detected_objects = []
                 mode_name = "None"
@@ -404,6 +491,10 @@ def main():
         elif key == ord('4'):
             detection_mode = 4
             print("📐 Switched to Edge Detection")
+        elif key == ord('5'):
+            detection_mode = 5
+            prev_frame = None  # Reset prev_frame when switching to flow mode
+            print("🌊 Switched to Optical Flow Detection")
         elif key == ord('s'):
             cv_mode_active = not cv_mode_active
             if cv_mode_active:

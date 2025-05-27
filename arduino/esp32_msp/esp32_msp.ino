@@ -391,7 +391,7 @@ bool initializeCamera() {
   config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_LATEST; // Use latest frame grab mode
   config.frame_size = FRAMESIZE_VGA;  // Start with small frame
-  config.jpeg_quality = 63;  // Lower number = better quality
+  config.jpeg_quality = 15;  // Lower number = better quality
   config.fb_count = 2;  // Use single frame buffer for lower memory usage
   config.fb_location = CAMERA_FB_IN_PSRAM;
 
@@ -409,6 +409,30 @@ bool initializeCamera() {
   if (err != ESP_OK) {
     Serial.printf("❌ Camera init failed with error 0x%x\n", err);
     return false;
+  }
+
+  if (err == ESP_OK) {
+    sensor_t *s = esp_camera_sensor_get();
+    if (s) {
+      // Brightness and exposure settings
+      s->set_brightness(s, 2); // Set brightness to 2
+      s->set_contrast(s, 2); // Set contrast to 2
+      s->set_saturation(s, 1); // Set saturation to 1
+
+      // White balance and exposure settings
+      s->set_whitebal(s, 1); // Enable white balance
+      s->set_exposure_ctrl(s, 1); // Enable exposure control
+      s->set_aec2(s, 1); // Enable AEC2 for better exposure
+      s->set_gain_ctrl(s, 1); // Enable gain control
+      s->set_agc_gain(s, 5); // Enable AGC gain
+
+      s->set_ae_level(s, 2); // Set AE level to 2
+
+      s->set_lenc(s, 1); // Enable lens correction
+      s->set_raw_gma(s, 1); // Enable raw gain
+
+      Serial.println("✅ Camera initialized successfully");
+    }
   }
 
   // Test capture
