@@ -15,6 +15,14 @@ void loop() {
   delay(50); // Send at ~20Hz like real RX
 }
 
+/**
+ * @brief Send an MSP SET_RAW_RC command to the flight controller.
+ * @details Send an MSP SET_RAW_RC command to the flight controller with the given RC values.
+ *          This function takes an array of 8 unsigned 16-bit integers, where each integer
+ *          represents the value of an RC channel. Channels are ordered as follows:
+ *          [Roll, Pitch, Throttle, Yaw, AUX1, AUX2, AUX3, AUX4].
+ * @param rcData Array of 8 unsigned 16-bit integers representing the values of the RC channels.
+ */
 void sendMSPSetRawRC(uint16_t *rcData) {
   const uint8_t MSP_SET_RAW_RC = 200;
   uint8_t payload[16];

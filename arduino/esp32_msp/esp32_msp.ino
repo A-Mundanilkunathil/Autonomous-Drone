@@ -52,7 +52,8 @@ unsigned long lastCVTime = 0;
 
 // Shared variables with mutex protection
 SemaphoreHandle_t rcMutex;
-uint16_t rc[8] = {1000, 1500, 1500, 1500, 1000, 1000, 1000, 1000};
+// RC channels: [Roll, Pitch, Throttle, Yaw, AUX1, AUX2, AUX3, AUX4]
+uint16_t rc[8] = {1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000};
 
 // Camera status
 bool cameraWorking = false;
@@ -607,8 +608,8 @@ void setup() {
 
   server.on("/disarm", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[4] = 1000;
-      rc[0] = 1000;
+      rc[4] = 1000;  // AUX1 remains at rc[4]
+      rc[2] = 1000;  // CHANGE: Throttle is rc[2], not rc[0]
       xSemaphoreGive(rcMutex);
       sendMSP();
       request->send(200, "text/plain", "Disarmed");
@@ -620,11 +621,12 @@ void setup() {
 
   server.on("/up", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[0] = constrain(rc[0] + 50, 1000, 2000);
+      // CHANGE: Throttle is rc[2], not rc[0]
+      rc[2] = constrain(rc[2] + 50, 1000, 2000);
       xSemaphoreGive(rcMutex);
       sendMSP();
-      request->send(200, "text/plain", "Up: " + String(rc[0]));
-      Serial.println("✅ Up: " + String(rc[0]));
+      request->send(200, "text/plain", "Up: " + String(rc[2]));
+      Serial.println("✅ Up: " + String(rc[2]));
     } else {
       request->send(503, "text/plain", "System busy");
     }
@@ -632,11 +634,12 @@ void setup() {
 
   server.on("/down", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[0] = constrain(rc[0] - 50, 1000, 2000);
+      // CHANGE: Throttle is rc[2], not rc[0]
+      rc[2] = constrain(rc[2] - 50, 1000, 2000);
       xSemaphoreGive(rcMutex);
       sendMSP();
-      request->send(200, "text/plain", "Down: " + String(rc[0]));
-      Serial.println("✅ Down: " + String(rc[0]));
+      request->send(200, "text/plain", "Down: " + String(rc[2]));
+      Serial.println("✅ Down: " + String(rc[2]));
     } else {
       request->send(503, "text/plain", "System busy");
     }
@@ -644,7 +647,8 @@ void setup() {
 
   server.on("/fwd", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[2] = 1650;
+      // CHANGE: Pitch is rc[1], not rc[2]
+      rc[1] = 1650;
       xSemaphoreGive(rcMutex);
       scheduleReset();
       sendMSP();
@@ -657,7 +661,8 @@ void setup() {
 
   server.on("/back", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[2] = 1350;
+      // CHANGE: Pitch is rc[1], not rc[2]
+      rc[1] = 1350;
       xSemaphoreGive(rcMutex);
       scheduleReset();
       sendMSP();
@@ -670,7 +675,8 @@ void setup() {
 
   server.on("/left", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[1] = 1350;
+      // CHANGE: Roll is rc[0], not rc[1]
+      rc[0] = 1350;
       xSemaphoreGive(rcMutex);
       scheduleReset();
       sendMSP();
@@ -683,7 +689,8 @@ void setup() {
 
   server.on("/right", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      rc[1] = 1650;
+      // CHANGE: Roll is rc[0], not rc[1]
+      rc[0] = 1650;
       xSemaphoreGive(rcMutex);
       scheduleReset();
       sendMSP();
@@ -696,7 +703,7 @@ void setup() {
 
   server.on("/emergency_land", HTTP_GET, [](AsyncWebServerRequest *request) {
     if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
-      emergencyStartThrottle = rc[0];
+      emergencyStartThrottle = rc[2];  // CHANGE: Throttle is rc[2], not rc[0]
       emergencyMode = true;
       emergencyStartTime = millis();
       xSemaphoreGive(rcMutex);
@@ -730,36 +737,36 @@ void setup() {
       if (xSemaphoreTake(rcMutex, 100 / portTICK_PERIOD_MS)) {
         
         if (body.indexOf("\"action\":\"forward\"") > 0) {
-          rc[2] = 1650;
+          rc[1] = 1650;  // CHANGE: Pitch is rc[1], not rc[2]
           scheduleReset();
           lastCVCommand = "forward";
         }
         else if (body.indexOf("\"action\":\"backward\"") > 0) {
-          rc[2] = 1350;
+          rc[1] = 1350;  // CHANGE: Pitch is rc[1], not rc[2]
           scheduleReset();
           lastCVCommand = "backward";
         }
         else if (body.indexOf("\"action\":\"left\"") > 0) {
-          rc[1] = 1350;
+          rc[0] = 1350;  // CHANGE: Roll is rc[0], not rc[1]
           scheduleReset();
           lastCVCommand = "left";
         }
         else if (body.indexOf("\"action\":\"right\"") > 0) {
-          rc[1] = 1650;
+          rc[0] = 1650;  // CHANGE: Roll is rc[0], not rc[1]
           scheduleReset();
           lastCVCommand = "right";
         }
         else if (body.indexOf("\"action\":\"up\"") > 0) {
-          rc[0] = constrain(rc[0] + 50, 1000, 2000);
+          rc[2] = constrain(rc[2] + 50, 1000, 2000);  // CHANGE: Throttle is rc[2], not rc[0]
           lastCVCommand = "up";
         }
         else if (body.indexOf("\"action\":\"down\"") > 0) {
-          rc[0] = constrain(rc[0] - 50, 1000, 2000);
+          rc[2] = constrain(rc[2] - 50, 1000, 2000);  // CHANGE: Throttle is rc[2], not rc[0]
           lastCVCommand = "down";
         }
         else if (body.indexOf("\"action\":\"hover\"") > 0) {
-          rc[1] = 1500;
-          rc[2] = 1500;
+          rc[0] = 1500;  // CHANGE: Roll is rc[0], not rc[1]
+          rc[1] = 1500;  // CHANGE: Pitch is rc[1], not rc[2]
           lastCVCommand = "hover";
         }
         
@@ -822,9 +829,9 @@ void loop() {
   // Handle reset logic
   if (needsReset && (millis() - lastCommandTime >= commandTimeout)) {
     if (xSemaphoreTake(rcMutex, 10 / portTICK_PERIOD_MS)) {
-      rc[1] = 1500;
-      rc[2] = 1500;
-      rc[3] = 1500;
+      rc[0] = 1500;  // CHANGE: Roll is rc[0], not rc[1]
+      rc[1] = 1500;  // CHANGE: Pitch is rc[1], not rc[2] 
+      rc[3] = 1500;  // Yaw remains at rc[3]
       xSemaphoreGive(rcMutex);
       sendMSP();
       needsReset = false;
@@ -838,10 +845,10 @@ void loop() {
     // Emergency landing logic
     if (emergencyTime <= 1000) {
       if (xSemaphoreTake(rcMutex, 10 / portTICK_PERIOD_MS)) {
-        rc[0] = emergencyStartThrottle;
-        rc[1] = 1500;
-        rc[2] = 1500;
-        rc[3] = 1500;
+        rc[2] = emergencyStartThrottle;  // CHANGE: Throttle is rc[2], not rc[0]
+        rc[0] = 1500;  // CHANGE: Roll is rc[0], not rc[1]
+        rc[1] = 1500;  // CHANGE: Pitch is rc[1], not rc[2]
+        rc[3] = 1500;  // Yaw remains at rc[3]
         xSemaphoreGive(rcMutex);
         sendMSP();
       }
@@ -855,10 +862,10 @@ void loop() {
       int targetThrottle = emergencyStartThrottle - reduction;
       
       if (xSemaphoreTake(rcMutex, 10 / portTICK_PERIOD_MS)) {
-        rc[0] = constrain(targetThrottle, 1000, 2000);
-        rc[1] = 1500;
-        rc[2] = 1500;
-        rc[3] = 1500;
+        rc[2] = constrain(targetThrottle, 1000, 2000);  // CHANGE: Throttle is rc[2]
+        rc[0] = 1500;  // CHANGE: Roll is rc[0]
+        rc[1] = 1500;  // CHANGE: Pitch is rc[1]
+        rc[3] = 1500;  // Yaw remains at rc[3]
         xSemaphoreGive(rcMutex);
         sendMSP();
       }
@@ -879,8 +886,8 @@ void loop() {
     // Emergency landing complete
     else if (emergencyTime > 6000) {
       if (xSemaphoreTake(rcMutex, 10 / portTICK_PERIOD_MS)) {
-        rc[4] = 1000;
-        rc[0] = 1000;
+        rc[4] = 1000;  // AUX1 for arm/disarm remains at rc[4]
+        rc[2] = 1000;  // CHANGE: Throttle is rc[2], not rc[0]
         emergencyMode = false;
         xSemaphoreGive(rcMutex);
         sendMSP();
