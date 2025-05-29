@@ -3,11 +3,10 @@ import numpy as np
 import requests
 import json
 import time
-import dlib 
 
 # ESP32-CAM stream URL (update with your ESP32 IP)
-STREAM_URL = "http://192.168.1.156/stream"  # Change to your ESP32 IP
-DRONE_API_URL = "http://192.168.1.156/cv/action"  # CV API endpoint
+STREAM_URL = "http://192.168.1.128/stream"  # Change to your ESP32 IP
+DRONE_API_URL = "http://192.168.1.128/cv/action"  # CV API endpoint
 
 # Motion detection setup
 bg_subtractor = cv2.createBackgroundSubtractorMOG2()
@@ -21,7 +20,7 @@ prev_frame = None
 def check_stream_availability():
     """Check if the stream is available"""
     try:
-        response = requests.get("http://192.168.1.156/status", timeout=5)
+        response = requests.get("http://192.168.1.128/status", timeout=5)
         if response.status_code == 200:
             status = response.json()
             return status.get('camera', False)
