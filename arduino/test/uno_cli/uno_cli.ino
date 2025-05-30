@@ -1,12 +1,9 @@
 // Arduino UNO - Flight Controller CLI Motor Control
 // Controls drone motors by sending CLI commands to flight controller
 
-#include <SoftwareSerial.h>
-
-// Software serial port for flight controller communication
-// Connect Arduino D2 -> FC TX line
-// Connect Arduino D3 -> FC RX line
-SoftwareSerial fcSerial(10, 11); // RX, TX
+// Comment out SoftwareSerial for testing
+// #include <SoftwareSerial.h>
+// SoftwareSerial fcSerial(10, 11);
 
 #define MSP_SET_RAW_RC 200
 #define MSP_ARM 210          // Custom command for arming
@@ -29,17 +26,8 @@ uint16_t lastAux3 = 2000;
 uint16_t lastAux4 = 1000;
 
 void setup() {
-  // Initialize serial communication with computer
+  // Only initialize one serial port for testing
   Serial.begin(115200);
-  Serial.println(F("Arduino Flight Controller CLI Motor Test"));
-  Serial.println(F("Commands:"));
-  Serial.println(F("  cli       - Enter CLI mode on flight controller"));
-  Serial.println(F("  exit      - Exit CLI mode"));
-  Serial.println(F("  motor X Y - Run motor X (0-3) at speed Y (1000-2000)"));
-  Serial.println(F("  test      - Run test sequence on all motors"));
-  
-  // Initialize serial connection to flight controller
-  fcSerial.begin(115200);
   delay(1000);
 }
 
@@ -130,7 +118,8 @@ void processCommand(String command) {
     fcSerial.println("disarm");
   }
   else if (command == "msptest") {
-    testMspControl();
+    Serial.println(F("Testing MSP locally..."));
+    sendRcValues(1500, 1500, 1000, 1500, 2000, 2000, 1000, 1000);
   }
   else if (command == "mspramp") {
     testMspRamp();
@@ -163,6 +152,15 @@ void processCommand(String command) {
   }
   else if (command == "mspv2test") {
     testMspV2Override();
+  }
+  else if (command == "testmspv2") {
+    testMspV2Override();
+  }
+  else if (command == "stopmspv2") {
+    stopMspV2Override();
+  }
+  else if (command == "mspv2arm") {
+    testMspV2Arming();
   }
   else {
     // Forward all other commands directly to FC
@@ -391,27 +389,21 @@ void testMspRamp() {
 }
 
 void sendMspCommand(uint8_t command, uint8_t* data, uint8_t dataSize) {
-  // Debug output
-  inspectMspPacket(command, data, dataSize);
+  // Send directly to Serial for testing
+  Serial.write('$');
+  Serial.write('M');
+  Serial.write('<');
+  Serial.write(dataSize);
+  Serial.write(command);
   
-  // MSP header
-  fcSerial.write('$'); // $
-  fcSerial.write('M'); // M
-  fcSerial.write('<'); // <
-  fcSerial.write(dataSize); // Data length
-  fcSerial.write(command); // Command type
-  
-  // Calculate checksum (XOR of size, command and all data bytes)
   uint8_t checksum = dataSize ^ command;
   
-  // Send data if any
   for (uint8_t i = 0; i < dataSize; i++) {
-    fcSerial.write(data[i]);
+    Serial.write(data[i]);
     checksum ^= data[i];
   }
   
-  // Send checksum
-  fcSerial.write(checksum);
+  Serial.write(checksum);
 }
 
 // Add MSP v2 support
@@ -832,18 +824,92 @@ void armWithMspOverride() {
 void testMspV2Override() {
   setupMspControl();
   
-  // Store these values globally and update them in the loop
+  Serial.println(F("MSPv2: Testing MSP v2 protocol..."));
+  
+  // Test 1: Basic MSPv2 communication
+  Serial.println(F("Test 1: Basic MSPv2 idle packet"));
+  sendRcValuesV2(1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000);
+  delay(2000);
+  
+  // Test 2: Try arming with MSPv2
+  Serial.println(F("Test 2: MSPv2 arming sequence"));
+  sendRcValuesV2(1500, 1500, 1000, 1500, 2000, 2000, 1000, 1000);
+  delay(3000);
+  
+  // Test 3: Test throttle with MSPv2
+  Serial.println(F("Test 3: MSPv2 throttle test"));
+  sendRcValuesV2(1500, 1500, 1300, 1500, 2000, 2000, 1000, 1000);
+  delay(3000);
+  
+  // Test 4: Disarm
+  Serial.println(F("Test 4: MSPv2 disarm"));
+  sendRcValuesV2(1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000);
+  delay(1000);
+  
+  Serial.println(F("MSPv2 test complete"));
+}
+
+// Add function to start continuous MSPv2 mode
+void startMspV2Continuous() {
+  setupMspControl();
+  
+  // Set initial safe values
   lastRoll = 1500;
   lastPitch = 1500;  
   lastThrottle = 1000;
   lastYaw = 1500;
-  lastAux1 = 2000;  // ARM
+  lastAux1 = 1000;  // Disarmed initially
   lastAux2 = 2000;  // ANGLE mode
-  lastAux3 = 2000;  // MSP_RC_OVERRIDE
+  lastAux3 = 1000;  // MSP_RC_OVERRIDE off initially
   lastAux4 = 1000;
   
-  Serial.println(F("MSPv2: Starting continuous override..."));
-  overrideModeActive = true;
+  Serial.println(F("MSPv2: Starting continuous mode..."));
+  Serial.println(F("Commands available:"));
+  Serial.println(F("  mspv2arm   - Arm and enable override"));
+  Serial.println(F("  stopmspv2  - Stop continuous mode"));
   
-  // The loop() function will now continuously send updates
+  overrideModeActive = true;
+}
+
+// Add function to stop MSPv2 mode
+void stopMspV2Override() {
+  Serial.println(F("MSPv2: Stopping continuous mode"));
+  overrideModeActive = false;
+  
+  // Send safe values one last time
+  sendRcValuesV2(1500, 1500, 1000, 1500, 1000, 1000, 1000, 1000);
+}
+
+// Add specific MSPv2 arming test
+void testMspV2Arming() {
+  if (!overrideModeActive) {
+    Serial.println(F("Start continuous mode first with 'testmspv2'"));
+    return;
+  }
+  
+  Serial.println(F("MSPv2: Arming sequence..."));
+  
+  // Step 1: Enable MSP RC Override
+  lastAux3 = 2000;  // MSP_RC_OVERRIDE
+  delay(1000);
+  
+  // Step 2: Arm
+  lastAux1 = 2000;  // ARM
+  Serial.println(F("Armed with MSPv2"));
+  delay(2000);
+  
+  // Step 3: Test throttle
+  Serial.println(F("Testing throttle"));
+  lastThrottle = 1200;
+  delay(3000);
+  
+  // Step 4: Return to idle
+  lastThrottle = 1000;
+  Serial.println(F("Throttle back to idle"));
+  delay(1000);
+  
+  // Step 5: Disarm
+  lastAux1 = 1000;
+  lastAux3 = 1000;
+  Serial.println(F("Disarmed"));
 }
