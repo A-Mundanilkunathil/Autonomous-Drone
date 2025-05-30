@@ -15,3 +15,4 @@ ESC
 2.   X - nano - solo power - connect with esp32
 3.   iterate - IMU gyro scope with Nano..
 4.   Camera calibration after everythihng passes. 
+
