@@ -93,7 +93,7 @@ AsyncWebServer server(80);
 
 // Control Reset System
 unsigned long lastCommandTime = 0;
-const unsigned long commandTimeout = 200;
+const unsigned long commandTimeout = 2000; // 2 seconds timeout for command processing
 bool needsReset = false;
 
 // Emergency Landing System
@@ -1206,18 +1206,16 @@ void loop() {
         }
     }
 
-  // Auto-reset directional controls with optimized timing
-  if (needsReset && (millis() - lastCommandTime >= commandTimeout)) {
-    if (xSemaphoreTake(rcMutex, pdMS_TO_TICKS(5))) {
-      rc[0] = RC_NEUTRAL;
-      rc[1] = RC_NEUTRAL;
-      send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
-      xSemaphoreGive(rcMutex);
-      needsReset = false;
-      Serial.println("RC: Auto-reset to neutral");
-    }
+  // Continuous RC override sending - send always when armed with non-neutral values
+  static unsigned long lastRcSend = 0;
+  if (millis() - lastRcSend >= 100) { // 10Hz like Python
+      if (fc_armed_status) {
+          // Always send RC override when armed to maintain control
+          send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
+      }
+      lastRcSend = millis();
   }
-
+  
   // Emergency landing sequence with detailed logging
   if (emergencyMode) {
     unsigned long emergencyTime = millis() - emergencyStartTime;
@@ -1382,7 +1380,6 @@ void send_rc_override_values(uint16_t ch1_roll, uint16_t ch2_pitch, uint16_t ch3
     if (!fc_detected) return;
     if (!fc_armed_status && mavlinkState != STATE_DISARM_VEHICLE && !emergencyMode) return;
     
-    if (millis() - lastRcOverrideSentMs < 100) return; // Rate limiting
     lastRcOverrideSentMs = millis();
     
     mavlink_message_t msg;
