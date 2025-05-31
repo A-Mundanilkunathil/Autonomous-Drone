@@ -639,6 +639,42 @@ String getHtmlPage() {
     addLog('Enhanced control interface loaded successfully', 'response');
     addLog('Keyboard shortcuts: WASD=movement, Q/E=throttle, R=arm, F=disarm', 'response');
     addLog('System ready for flight operations', 'response');
+    
+    function updateLogs() {
+      fetch('/logs')
+        .then(response => response.json())
+        .then(logs => {
+          const logContainer = document.getElementById('commLog');
+          // Clear existing logs except the first line
+          const firstLine = logContainer.querySelector('.response');
+          logContainer.innerHTML = '';
+          if (firstLine) logContainer.appendChild(firstLine);
+          
+          logs.forEach(log => {
+            const colorClass = {
+              'error': 'error',
+              'warning': 'warning',
+              'mavlink': 'command',
+              'success': 'response',
+              'system': 'command',
+              'info': 'response'
+            }[log.type] || 'response';
+            
+            logContainer.innerHTML += `<div><span class="timestamp">[${log.time}]</span> <span class="${colorClass}">${log.msg}</span></div>`;
+          });
+          
+          logContainer.scrollTop = logContainer.scrollHeight;
+        })
+        .catch(error => {
+          console.error('Failed to fetch logs:', error);
+        });
+    }
+
+    // Update logs every 2 seconds
+    setInterval(updateLogs, 2000);
+
+    // Call immediately on load
+    updateLogs();
   </script>
 </body>
 </html>)rawliteral";
@@ -844,41 +880,83 @@ void cameraTask(void *parameter) {
   }
 }
 
+// Add these global variables after the existing globals
+struct LogEntry {
+  String timestamp;
+  String message;
+  String type;
+  unsigned long millis_time;
+};
+
+const int MAX_WEB_LOGS = 50;
+LogEntry webLogs[MAX_WEB_LOGS];
+int webLogIndex = 0;
+int webLogCount = 0;
+SemaphoreHandle_t logMutex;
+
+// Add this function to replace Serial.println calls
+void addWebLog(String message, String type = "info") {
+  if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(10))) {
+    unsigned long now = millis();
+    unsigned long seconds = now / 1000;
+    unsigned long minutes = seconds / 60;
+    unsigned long hours = minutes / 60;
+    
+    String timestamp = String(hours % 24) + ":" + 
+                      String((minutes % 60) < 10 ? "0" : "") + String(minutes % 60) + ":" + 
+                      String((seconds % 60) < 10 ? "0" : "") + String(seconds % 60);
+    
+    webLogs[webLogIndex] = {timestamp, message, type, now};
+    webLogIndex = (webLogIndex + 1) % MAX_WEB_LOGS;
+    if (webLogCount < MAX_WEB_LOGS) webLogCount++;
+    
+    xSemaphoreGive(logMutex);
+  }
+  
+  // Still keep Serial for development/debugging
+  Serial.println("[" + type + "] " + message);
+}
+
+// Initialize the log mutex in setup()
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== ESP32 Drone Controller v2.0 ===");
   
-  pinMode(LED_GPIO, OUTPUT); 
-  digitalWrite(LED_GPIO, LOW);
-
+  // Initialize mutexes
+  rcMutex = xSemaphoreCreateMutex();
+  frameMutex = xSemaphoreCreateMutex();
+  logMutex = xSemaphoreCreateMutex();
+  
+  addWebLog("ESP32 Drone Controller v2.0 starting...", "system");
+  
   // Initialize MAVLink communication
   MAVLINK_SERIAL_PORT.begin(MAVLINK_BAUD_RATE, SERIAL_8N1, MAVLINK_RX_PIN, MAVLINK_TX_PIN);
   if (!MAVLINK_SERIAL_PORT) {
-    Serial.println("MAVLink: Serial init FAILED");
+    addWebLog("MAVLink: Serial init FAILED", "error");
     mavlinkState = STATE_ERROR;
   } else {
-    Serial.println("MAVLink: Serial initialized");
+    addWebLog("MAVLink: Serial initialized", "success");
     mavlinkState = STATE_INIT;
   }
 
-  // Initialize system mutexes
-  rcMutex = xSemaphoreCreateMutex();
-  frameMutex = xSemaphoreCreateMutex();
-  
   // Initialize camera system
   cameraWorking = initializeCamera();
-
+  if (cameraWorking) {
+    addWebLog("Camera: Initialized successfully", "success");
+  } else {
+    addWebLog("Camera: Initialization failed", "error");
+  }
+  
   // Configure WiFi
   WiFi.setSleep(false); 
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
   WiFi.begin(ssid, password); 
   Serial.print("WiFi: Connecting");
   while (WiFi.status() != WL_CONNECTED) { 
-    delay(250); // Faster connection attempts
+    delay(250);
     Serial.print("."); 
   }
-  Serial.printf("\nWiFi: Connected %s (RSSI: %d dBm)\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
-
+  addWebLog("WiFi: Connected " + WiFi.localIP().toString() + " (RSSI: " + String(WiFi.RSSI()) + " dBm)", "success");
+  
   // Configure web server routes
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) { 
     request->send(200, "text/html", getHtmlPage()); 
@@ -892,6 +970,29 @@ void setup() {
     request->send(200, "text/plain", cameraWorking ? "Camera OK" : "Camera Failed");
   });
 
+  // ADD THE LOGS ENDPOINT HERE, INSIDE setup()
+  server.on("/logs", HTTP_GET, [](AsyncWebServerRequest *request) {
+    String response = "[";
+    
+    if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(100))) {
+      int startIdx = webLogCount < MAX_WEB_LOGS ? 0 : webLogIndex;
+      
+      for (int i = 0; i < webLogCount; i++) {
+        int idx = (startIdx + i) % MAX_WEB_LOGS;
+        if (i > 0) response += ",";
+        response += "{\"time\":\"" + webLogs[idx].timestamp + 
+                   "\",\"msg\":\"" + webLogs[idx].message + 
+                   "\",\"type\":\"" + webLogs[idx].type + 
+                   "\",\"millis\":" + String(webLogs[idx].millis_time) + "}";
+      }
+      
+      xSemaphoreGive(logMutex);
+    }
+    
+    response += "]";
+    request->send(200, "application/json", response);
+  });
+
   // ARM command handler
   server.on("/arm", HTTP_GET, [](AsyncWebServerRequest *request) {
     unsigned long cmdStart = millis();
@@ -901,12 +1002,12 @@ void setup() {
         arm_disarm_vehicle(true);
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "ARM command sent (" + String(lastLatencyMs) + "ms)");
-        Serial.printf("Command: ARM sent in %lums\n", lastLatencyMs);
+        addWebLog("Command: ARM sent in " + String(lastLatencyMs) + "ms", "success");
     } else if (fc_armed_status) {
         request->send(200, "text/plain", "Vehicle already armed");
     } else {
         request->send(503, "text/plain", "Cannot arm: FC not connected");
-        Serial.println("Command: ARM rejected - FC disconnected");
+        addWebLog("Command: ARM rejected - FC disconnected", "error");
     }
   });
 
@@ -932,62 +1033,19 @@ void setup() {
     }
   });
 
-  // Throttle UP command
-  server.on("/up", HTTP_GET, [](AsyncWebServerRequest *request) {
-    unsigned long cmdStart = millis();
-    commandCount++;
-    
-    if (fc_armed_status) {
-        if (xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
-            rc[2] = constrain(rc[2] + 50, RC_THROTTLE_LOW, 2000);
-            send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
-            xSemaphoreGive(rcMutex);
-            lastLatencyMs = millis() - cmdStart;
-            request->send(200, "text/plain", "Throttle: " + String(rc[2]) + " (" + String(lastLatencyMs) + "ms)");
-            Serial.printf("Command: THROTTLE+ %d (%lums)\n", rc[2], lastLatencyMs);
-        } else { 
-          request->send(503, "text/plain", "System busy"); 
-        }
-    } else { 
-      request->send(403, "text/plain", "Vehicle not armed"); 
-    }
-  });
-
-  // Throttle DOWN command
-  server.on("/down", HTTP_GET, [](AsyncWebServerRequest *request) {
-    unsigned long cmdStart = millis();
-    commandCount++;
-    
-    if (fc_armed_status) {
-        if (xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
-            rc[2] = constrain(rc[2] - 50, RC_THROTTLE_LOW, 2000);
-            send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
-            xSemaphoreGive(rcMutex);
-            lastLatencyMs = millis() - cmdStart;
-            request->send(200, "text/plain", "Throttle: " + String(rc[2]) + " (" + String(lastLatencyMs) + "ms)");
-            Serial.printf("Command: THROTTLE- %d (%lums)\n", rc[2], lastLatencyMs);
-        } else { 
-          request->send(503, "text/plain", "System busy"); 
-        }
-    } else { 
-      request->send(403, "text/plain", "Vehicle not armed"); 
-    }
-  });
-
-  // Movement commands with performance tracking
+  // Movement commands - just update rc values, let loop() handle sending
   server.on("/fwd", HTTP_GET, [](AsyncWebServerRequest *request) {
     unsigned long cmdStart = millis();
     commandCount++;
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[1] = RC_PITCH_FORWARD_CMD;
-        send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
         xSemaphoreGive(rcMutex);
         scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Pitch forward (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: FORWARD (%lums)\n", lastLatencyMs);
     } else { 
-      request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+        request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
     }
   });
 
@@ -996,14 +1054,13 @@ void setup() {
     commandCount++;
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[1] = RC_PITCH_BACKWARD_CMD;
-        send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
         xSemaphoreGive(rcMutex);
         scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Pitch backward (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: BACKWARD (%lums)\n", lastLatencyMs);
     } else { 
-      request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+        request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
     }
   });
 
@@ -1012,14 +1069,13 @@ void setup() {
     commandCount++;
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[0] = RC_ROLL_LEFT_CMD;
-        send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
         xSemaphoreGive(rcMutex);
         scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Roll left (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: LEFT (%lums)\n", lastLatencyMs);
     } else { 
-      request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+        request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
     }
   });
 
@@ -1028,14 +1084,74 @@ void setup() {
     commandCount++;
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[0] = RC_ROLL_RIGHT_CMD;
-        send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]);
         xSemaphoreGive(rcMutex);
         scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Roll right (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: RIGHT (%lums)\n", lastLatencyMs);
     } else { 
-      request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+        request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+    }
+  });
+
+  // Throttle commands - just update rc values
+  server.on("/up", HTTP_GET, [](AsyncWebServerRequest *request) {
+    unsigned long cmdStart = millis();
+    commandCount++;
+    
+    if (fc_armed_status) {
+        if (xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
+            rc[2] = constrain(rc[2] + 50, RC_THROTTLE_LOW, 2000);
+            xSemaphoreGive(rcMutex);
+            lastLatencyMs = millis() - cmdStart;
+            request->send(200, "text/plain", "Throttle: " + String(rc[2]) + " (" + String(lastLatencyMs) + "ms)");
+            Serial.printf("Command: THROTTLE+ %d (%lums)\n", rc[2], lastLatencyMs);
+        } else { 
+            request->send(503, "text/plain", "System busy"); 
+        }
+    } else { 
+        request->send(403, "text/plain", "Vehicle not armed"); 
+    }
+  });
+
+  server.on("/down", HTTP_GET, [](AsyncWebServerRequest *request) {
+    unsigned long cmdStart = millis();
+    commandCount++;
+    
+    if (fc_armed_status) {
+        if (xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
+            rc[2] = constrain(rc[2] - 50, RC_THROTTLE_LOW, 2000);
+            xSemaphoreGive(rcMutex);
+            lastLatencyMs = millis() - cmdStart;
+            request->send(200, "text/plain", "Throttle: " + String(rc[2]) + " (" + String(lastLatencyMs) + "ms)");
+            Serial.printf("Command: THROTTLE- %d (%lums)\n", rc[2], lastLatencyMs);
+        } else { 
+            request->send(503, "text/plain", "System busy"); 
+        }
+    } else { 
+        request->send(403, "text/plain", "Vehicle not armed"); 
+    }
+  });
+
+  // Keep the disarm command as is since it needs immediate RC override
+  server.on("/disarm", HTTP_GET, [](AsyncWebServerRequest *request) {
+    unsigned long cmdStart = millis();
+    commandCount++;
+    
+    if (fc_detected && fc_armed_status) {
+        if (xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
+            rc[2] = RC_THROTTLE_LOW; // Set throttle to minimum immediately
+            send_rc_override_values(rc[0], rc[1], rc[2], rc[3], rc[4], rc[5], rc[6], rc[7]); // Send immediately for safety
+            xSemaphoreGive(rcMutex);
+        }
+        arm_disarm_vehicle(false);
+        emergencyMode = false;
+        lastLatencyMs = millis() - cmdStart;
+        request->send(200, "text/plain", "DISARM command sent (" + String(lastLatencyMs) + "ms)");
+        Serial.printf("Command: DISARM sent in %lums\n", lastLatencyMs);
+    } else {
+        request->send(503, "text/plain", "Cannot disarm: Not armed or FC disconnected");
+        Serial.println("Command: DISARM rejected");
     }
   });
 
@@ -1090,26 +1206,26 @@ void setup() {
   });
   
   server.begin();
-  Serial.printf("Web server: Started on %s\n", WiFi.localIP().toString().c_str());
+  addWebLog("Web server: Started on " + WiFi.localIP().toString(), "success");
   if (cameraWorking) { 
-    Serial.printf("Video stream: http://%s/stream\n", WiFi.localIP().toString().c_str()); 
+    addWebLog("Video stream: http://" + WiFi.localIP().toString() + "/stream", "success");
   }
 
-  // Start camera processing task with higher priority (in setup() function)
+  // Start camera processing task
   if (cameraWorking) {
     xTaskCreatePinnedToCore(
       cameraTask,
       "CameraTask", 
       4096,
       NULL,
-      2,  // Priority
+      2,
       &cameraTaskHandle,
-      0   // Core 0
+      0
     );
-    Serial.println("Camera: Task started on Core 0");
+    addWebLog("Camera: Task started on Core 0", "system");
   }
   
-  Serial.println("=== System Ready ===");
+  addWebLog("=== System Ready ===", "system");
   lastCommandMs = millis();
 }
 
@@ -1122,9 +1238,9 @@ void loop() {
             lastEspHeartbeatSentMs = millis();
         }
 
-        // Process incoming MAVLink messages with performance tracking
+        // Process incoming MAVLink messages
         uint8_t messageCount = 0;
-        while (MAVLINK_SERIAL_PORT.available() > 0 && messageCount < 10) { // Limit processing per loop
+        while (MAVLINK_SERIAL_PORT.available() > 0 && messageCount < 10) {
             mavlink_message_t msg;
             mavlink_status_t status;
             uint8_t c = MAVLINK_SERIAL_PORT.read();
@@ -1135,27 +1251,26 @@ void loop() {
             }
         }
 
-        // Flight Controller State Machine with timing
-        unsigned long stateStartTime = millis();
+        // Flight Controller State Machine
         switch (mavlinkState) {
             case STATE_INIT:
-                Serial.println("State: INIT -> WAIT_FOR_HEARTBEAT");
+                addWebLog("State: INIT -> WAIT_FOR_HEARTBEAT", "system");
                 mavlinkState = STATE_WAIT_FOR_HEARTBEAT;
                 stateTimer = millis();
                 break;
                 
             case STATE_WAIT_FOR_HEARTBEAT:
                 if (fc_detected) {
-                    Serial.println("State: WAIT_FOR_HEARTBEAT -> SET_MODE_STABILIZE");
+                    addWebLog("State: WAIT_FOR_HEARTBEAT -> SET_MODE_STABILIZE", "system");
                     mavlinkState = STATE_SET_MODE_STABILIZE;
                 } else if (millis() - stateTimer > 7000) {
-                    Serial.println("State: WAIT_FOR_HEARTBEAT -> ERROR (timeout)");
+                    addWebLog("State: WAIT_FOR_HEARTBEAT -> ERROR (timeout)", "error");
                     mavlinkState = STATE_ERROR;
                 }
                 break;
                 
             case STATE_SET_MODE_STABILIZE:
-                Serial.printf("State: Setting STABILIZE mode (ID: %d)\n", stabilize_mode_id);
+                addWebLog("State: Setting STABILIZE mode (ID: " + String(stabilize_mode_id) + ")", "system");
                 set_flight_mode(stabilize_mode_id);
                 mavlinkState = STATE_WAIT_FOR_MODE_ACK;
                 stateTimer = millis();
@@ -1163,7 +1278,7 @@ void loop() {
                 
             case STATE_WAIT_FOR_MODE_ACK:
                 if (millis() - stateTimer > 3000) {
-                    Serial.println("State: WAIT_FOR_MODE_ACK -> ARM_VEHICLE (timeout)");
+                    addWebLog("State: WAIT_FOR_MODE_ACK -> ARM_VEHICLE (timeout)", "warning");
                     mavlinkState = STATE_ARM_VEHICLE; 
                 }
                 break;
@@ -1171,31 +1286,30 @@ void loop() {
             case STATE_ARM_VEHICLE:
                 if (fc_armed_status) {
                     mavlinkState = STATE_OPERATIONAL;
-                    Serial.println("State: ARM_VEHICLE -> OPERATIONAL");
+                    addWebLog("State: ARM_VEHICLE -> OPERATIONAL", "success");
                 }
                 break;
                 
             case STATE_WAIT_FOR_ARMED:
                 if (fc_armed_status) {
-                    Serial.println("State: WAIT_FOR_ARMED -> OPERATIONAL");
+                    addWebLog("State: WAIT_FOR_ARMED -> OPERATIONAL", "success");
                     mavlinkState = STATE_OPERATIONAL;
                 } else if (millis() - stateTimer > 7000) {
-                    Serial.println("State: WAIT_FOR_ARMED -> ERROR (timeout)");
+                    addWebLog("State: WAIT_FOR_ARMED -> ERROR (timeout)", "error");
                     mavlinkState = STATE_ERROR;
                 }
                 break;
                 
             case STATE_OPERATIONAL:
                 if (!fc_armed_status && fc_detected) {
-                    Serial.println("State: OPERATIONAL -> WAIT_FOR_HEARTBEAT (disarmed)");
+                    addWebLog("State: OPERATIONAL -> WAIT_FOR_HEARTBEAT (disarmed)", "info");
                     mavlinkState = STATE_WAIT_FOR_HEARTBEAT;
                 }
                 break;
                 
             case STATE_ERROR:
-                // Communication error state - attempt recovery every 10 seconds
                 if (millis() - stateTimer > 10000) {
-                    Serial.println("State: ERROR -> INIT (recovery attempt)");
+                    addWebLog("State: ERROR -> INIT (recovery attempt)", "warning");
                     mavlinkState = STATE_INIT;
                     stateTimer = millis();
                 }
@@ -1292,15 +1406,16 @@ void handle_mavlink_message(mavlink_message_t* msg) {
                     fc_system_id = msg->sysid;
                     fc_component_id = msg->compid;
                     fc_detected = true;
-                    Serial.printf("FC: Detected SYS:%d COMP:%d TYPE:%d AP:%d\n",
-                                  fc_system_id, fc_component_id, heartbeat.type, heartbeat.autopilot);
+                    addWebLog("FC: Detected SYS:" + String(fc_system_id) + " COMP:" + String(fc_component_id) + 
+                             " TYPE:" + String(heartbeat.type) + " AP:" + String(heartbeat.autopilot), "mavlink");
                     stabilize_mode_id = 0;
                 }
                 
                 bool armed_from_fc = (heartbeat.base_mode & MAV_MODE_FLAG_SAFETY_ARMED);
                 if (armed_from_fc != fc_armed_status) {
                     fc_armed_status = armed_from_fc;
-                    Serial.printf("FC: Armed status changed to %s\n", fc_armed_status ? "ARMED" : "DISARMED");
+                    addWebLog("FC: Armed status changed to " + String(fc_armed_status ? "ARMED" : "DISARMED"), 
+                             fc_armed_status ? "warning" : "info");
                     
                     if (fc_armed_status && mavlinkState < STATE_OPERATIONAL) {
                         mavlinkState = STATE_OPERATIONAL;
@@ -1316,17 +1431,8 @@ void handle_mavlink_message(mavlink_message_t* msg) {
         case MAVLINK_MSG_ID_COMMAND_ACK: {
             mavlink_command_ack_t ack;
             mavlink_msg_command_ack_decode(msg, &ack);
-            Serial.printf("FC: Command ACK CMD:%u RESULT:%u\n", ack.command, ack.result);
-            
-            if (mavlinkState == STATE_WAIT_FOR_MODE_ACK && ack.command == MAV_CMD_DO_SET_MODE) {
-                if (ack.result == MAV_RESULT_ACCEPTED) {
-                    Serial.println("FC: Flight mode set successfully");
-                    mavlinkState = STATE_ARM_VEHICLE;
-                } else {
-                    Serial.printf("FC: Flight mode setting failed: %d\n", ack.result);
-                    mavlinkState = STATE_ERROR;
-                }
-            }
+            addWebLog("FC: Command ACK CMD:" + String(ack.command) + " RESULT:" + String(ack.result), 
+                     ack.result == MAV_RESULT_ACCEPTED ? "success" : "error");
             break;
         }
         
@@ -1336,7 +1442,7 @@ void handle_mavlink_message(mavlink_message_t* msg) {
             mavlink_msg_statustext_decode(msg, &statustext);
             strncpy(text, statustext.text, MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN);
             text[MAVLINK_MSG_STATUSTEXT_FIELD_TEXT_LEN] = '\0';
-            Serial.printf("FC: Status (Sev:%d): %s\n", statustext.severity, text);
+            addWebLog("FC: Status (Sev:" + String(statustext.severity) + "): " + String(text), "mavlink");
             break;
         }
         
