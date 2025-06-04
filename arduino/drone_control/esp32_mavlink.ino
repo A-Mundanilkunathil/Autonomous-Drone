@@ -8,10 +8,12 @@
 // MAVLink Serial Configuration
 HardwareSerial& MAVLINK_SERIAL_PORT = Serial2;
 const long MAVLINK_BAUD_RATE = 115200;
-const int MAVLINK_RX_PIN = 14;
-const int MAVLINK_TX_PIN = 15;
+const int MAVLINK_RX_PIN = 13;
+const int MAVLINK_TX_PIN = 12;
 const unsigned long FC_HEARTBEAT_TIMEOUT_MS = 5000;
 unsigned long lastFcHeartbeatMs = 0;
+const uint8_t DEFAULT_FC_SYSTEM_ID = 1;
+const uint8_t DEFAULT_FC_COMPONENT_ID = 1;
 
 // MAVLink System IDs
 const uint8_t ESP32_SYSTEM_ID    = 255;
@@ -90,11 +92,6 @@ const char* ssid = "HP";
 const char* password = "4085948901";
 
 AsyncWebServer server(80);
-
-// Control Reset System
-unsigned long lastCommandTime = 0;
-const unsigned long commandTimeout = 2000; // 2 seconds timeout for command processing
-bool needsReset = false;
 
 // Emergency Landing System
 bool emergencyMode = false;
@@ -228,6 +225,8 @@ String getHtmlPage() {
     .movement .btn:nth-child(2) { grid-area: 1 / 2; }
     .movement .btn:nth-child(3) { grid-area: 2 / 3; }
     .movement .btn:nth-child(4) { grid-area: 3 / 2; }
+    .movement .btn:nth-child(5) { grid-area: 1 / 1; }
+    .movement .btn:nth-child(6) { grid-area: 1 / 3; }
     .movement-center { grid-area: 2 / 2; background: #333; border-radius: 4px; 
                        display: flex; align-items: center; justify-content: center; 
                        color: #666; font-size: 20px; }
@@ -400,7 +399,15 @@ String getHtmlPage() {
           <button class="btn btn-primary" onclick="sendCommand('fwd')" id="fwdBtn">⬆️ FWD</button>
           <button class="btn btn-primary" onclick="sendCommand('right')" id="rightBtn">➡️ RIGHT</button>
           <button class="btn btn-primary" onclick="sendCommand('back')" id="backBtn">⬇️ BACK</button>
+          <button class="btn btn-primary" onclick="sendCommand('yaw_left')" id="yawLeftBtn">↺ YAW L</button>
+          <button class="btn btn-primary" onclick="sendCommand('yaw_right')" id="yawRightBtn">↻ YAW R</button>
           <div class="movement-center">🎯</div>
+        </div>
+        
+        <div style="margin-top: 15px;">
+          <button class="btn btn-warning" onclick="sendCommand('stop')" id="stopBtn" style="width: 100%; font-size: 14px; font-weight: bold;">
+            ⏹️ STOP ALL MOVEMENT
+          </button>
         </div>
         
         <div style="margin-top: 15px;">
@@ -624,7 +631,8 @@ String getHtmlPage() {
       
       const keyMap = {
         'w': 'fwd', 'a': 'left', 's': 'back', 'd': 'right',
-        'q': 'up', 'e': 'down', 'r': 'arm', 'f': 'disarm'
+        'q': 'up', 'e': 'down', 'r': 'arm', 'f': 'disarm',
+        ' ': 'stop', 'x': 'stop'  
       };
       
       const cmd = keyMap[e.key.toLowerCase()];
@@ -637,7 +645,7 @@ String getHtmlPage() {
     
     // Initialize interface
     addLog('Enhanced control interface loaded successfully', 'response');
-    addLog('Keyboard shortcuts: WASD=movement, Q/E=throttle, R=arm, F=disarm', 'response');
+    addLog('Keyboard shortcuts: WASD=movement, Q/E=throttle, R=arm, F=disarm, SPACE/X=stop', 'response');  
     addLog('System ready for flight operations', 'response');
     
     function updateLogs() {
@@ -678,11 +686,6 @@ String getHtmlPage() {
   </script>
 </body>
 </html>)rawliteral";
-}
-
-void scheduleReset() {
-  needsReset = true;
-  lastCommandTime = millis();
 }
 
 bool initializeCamera() {
@@ -880,7 +883,6 @@ void cameraTask(void *parameter) {
   }
 }
 
-// Add these global variables after the existing globals
 struct LogEntry {
   String timestamp;
   String message;
@@ -894,7 +896,6 @@ int webLogIndex = 0;
 int webLogCount = 0;
 SemaphoreHandle_t logMutex;
 
-// Add this function to replace Serial.println calls
 void addWebLog(String message, String type = "info") {
   if (xSemaphoreTake(logMutex, pdMS_TO_TICKS(10))) {
     unsigned long now = millis();
@@ -938,6 +939,11 @@ void setup() {
     mavlinkState = STATE_INIT;
   }
 
+  // Force MAVLink 1 protocol
+  mavlink_status_t* mavlink_status = mavlink_get_channel_status(MAVLINK_COMM_0);
+  mavlink_status->flags |= MAVLINK_STATUS_FLAG_OUT_MAVLINK1;
+  addWebLog("MAVLink: Forced to MAVLink 1 protocol", "system");
+
   // Initialize camera system
   cameraWorking = initializeCamera();
   if (cameraWorking) {
@@ -970,7 +976,6 @@ void setup() {
     request->send(200, "text/plain", cameraWorking ? "Camera OK" : "Camera Failed");
   });
 
-  // ADD THE LOGS ENDPOINT HERE, INSIDE setup()
   server.on("/logs", HTTP_GET, [](AsyncWebServerRequest *request) {
     String response = "[";
     
@@ -999,6 +1004,7 @@ void setup() {
     commandCount++;
     
     if (fc_detected && !fc_armed_status) {
+        rc[2] = 1100;
         arm_disarm_vehicle(true);
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "ARM command sent (" + String(lastLatencyMs) + "ms)");
@@ -1040,7 +1046,6 @@ void setup() {
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[1] = RC_PITCH_FORWARD_CMD;
         xSemaphoreGive(rcMutex);
-        scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Pitch forward (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: FORWARD (%lums)\n", lastLatencyMs);
@@ -1055,7 +1060,6 @@ void setup() {
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[1] = RC_PITCH_BACKWARD_CMD;
         xSemaphoreGive(rcMutex);
-        scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Pitch backward (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: BACKWARD (%lums)\n", lastLatencyMs);
@@ -1070,7 +1074,6 @@ void setup() {
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[0] = RC_ROLL_LEFT_CMD;
         xSemaphoreGive(rcMutex);
-        scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Roll left (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: LEFT (%lums)\n", lastLatencyMs);
@@ -1085,10 +1088,38 @@ void setup() {
     if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
         rc[0] = RC_ROLL_RIGHT_CMD;
         xSemaphoreGive(rcMutex);
-        scheduleReset();
         lastLatencyMs = millis() - cmdStart;
         request->send(200, "text/plain", "Roll right (" + String(lastLatencyMs) + "ms)");
         Serial.printf("Command: RIGHT (%lums)\n", lastLatencyMs);
+    } else { 
+        request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+    }
+  });
+
+  // Yaw commands
+  server.on("/yaw_left", HTTP_GET, [](AsyncWebServerRequest *request) {
+    unsigned long cmdStart = millis();
+    commandCount++;
+    if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
+        rc[3] = YAW_CCW;
+        xSemaphoreGive(rcMutex);
+        lastLatencyMs = millis() - cmdStart;
+        request->send(200, "text/plain", "Yaw left (" + String(lastLatencyMs) + "ms)");
+        addWebLog("Command: YAW LEFT in " + String(lastLatencyMs) + "ms", "success");
+    } else { 
+        request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
+    }
+  });
+
+  server.on("/yaw_right", HTTP_GET, [](AsyncWebServerRequest *request) {
+    unsigned long cmdStart = millis();
+    commandCount++;
+    if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
+        rc[3] = YAW_CW;
+        xSemaphoreGive(rcMutex);
+        lastLatencyMs = millis() - cmdStart;
+        request->send(200, "text/plain", "Yaw right (" + String(lastLatencyMs) + "ms)");
+        addWebLog("Command: YAW RIGHT in " + String(lastLatencyMs) + "ms", "success");
     } else { 
         request->send(fc_armed_status ? 503 : 403, "text/plain", fc_armed_status ? "System busy" : "Vehicle not armed"); 
     }
@@ -1185,6 +1216,27 @@ void setup() {
     }
   });
 
+  server.on("/stop", HTTP_GET, [](AsyncWebServerRequest *request) {
+    unsigned long cmdStart = millis();
+    commandCount++;
+
+    // Check if FC is armed and mutex is available
+    if (fc_armed_status && xSemaphoreTake(rcMutex, pdMS_TO_TICKS(50))) {
+      rc[0] = RC_NEUTRAL; // Roll
+      rc[1] = RC_NEUTRAL; // Pitch
+      rc[3] = RC_NEUTRAL; // Yaw
+
+      // Keep throttle unchanged
+      xSemaphoreGive(rcMutex); // Give mutex before sending
+      lastLatencyMs = millis() - cmdStart; // Calculate latency
+      request->send(200, "text/plain", "STOP command sent (" + String(lastLatencyMs) + "ms)");
+      addWebLog("Command: STOP sent in " + String(lastLatencyMs) + "ms", "success");
+    } else {
+      request->send(fc_armed_status ? 503 : 403, "text/plain", 
+                   fc_armed_status ? "System busy" : "Vehicle not armed");
+    }
+  });
+
   // Enhanced status API
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request) { 
     String status = "{\"camera\":" + String(cameraWorking ? "true" : "false") + 
@@ -1240,11 +1292,54 @@ void loop() {
 
         // Process incoming MAVLink messages
         uint8_t messageCount = 0;
+
+        static unsigned long lastRxDebugTime = 0;
+        static unsigned long totalBytesReceived = 0;
+        static bool firstByteReceived = false;
+
+        if (millis() - lastRxDebugTime > 2000) { // Debug every 2 seconds
+            int available = MAVLINK_SERIAL_PORT.available();
+            
+            if (available > 0) {
+                if (!firstByteReceived) {
+                    addWebLog("DEBUG: First bytes detected on UART1! Available: " + String(available), "success");
+                    firstByteReceived = true;
+                } else {
+                    addWebLog("DEBUG: UART1 RX active - " + String(available) + " bytes available", "info");
+                }
+                
+                // Read and display first few bytes in hex
+                String hexData = "Raw: ";
+                int bytesToShow = min(available, 8);
+                for(int i = 0; i < bytesToShow; i++) {
+                    if(MAVLINK_SERIAL_PORT.available()) {
+                        uint8_t b = MAVLINK_SERIAL_PORT.read();
+                        totalBytesReceived++;
+                        hexData += "0x" + String(b, HEX) + " ";
+                    }
+                }
+                addWebLog(hexData + " (Total RX: " + String(totalBytesReceived) + ")", "info");
+            } else {
+                // Still no data after everything we've tried
+                addWebLog("DEBUG: UART1 RX still SILENT - No bytes available (FC should be sending heartbeats)", "error");
+            }
+            lastRxDebugTime = millis();
+        }
+        // END DEBUG BLOCK
+
         while (MAVLINK_SERIAL_PORT.available() > 0 && messageCount < 10) {
             mavlink_message_t msg;
             mavlink_status_t status;
             uint8_t c = MAVLINK_SERIAL_PORT.read();
+            
+            static unsigned long lastParseLog = 0;
+            if (millis() - lastParseLog > 5000) { // Log every 5 seconds if we're getting bytes but no valid messages
+                addWebLog("DEBUG: Reading bytes but no valid MAVLink messages parsed yet", "warning");
+                lastParseLog = millis();
+            }
+            
             if (mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)) {
+                addWebLog("DEBUG: Successfully parsed MAVLink message ID: " + String(msg.msgid) + " from SYS: " + String(msg.sysid), "success");
                 handle_mavlink_message(&msg);
                 messagesReceived++;
                 messageCount++;
@@ -1329,7 +1424,7 @@ void loop() {
       }
       lastRcSend = millis();
   }
-  
+
   // Emergency landing sequence with detailed logging
   if (emergencyMode) {
     unsigned long emergencyTime = millis() - emergencyStartTime;
@@ -1395,7 +1490,22 @@ void send_esp_heartbeat() {
     messagesSent++;
 }
 
+void checkMavlinkProtocol(mavlink_message_t* msg) {
+    static bool protocolLogged = false;
+    if (!protocolLogged) {
+        if (msg->magic == MAVLINK_STX) {
+            addWebLog("MAVLink: Detected MAVLink 2 from FC", "warning");
+        } else if (msg->magic == MAVLINK_STX_MAVLINK1) {
+            addWebLog("MAVLink: Detected MAVLink 1 from FC", "success");
+        }
+        protocolLogged = true;
+    }
+}
+
 void handle_mavlink_message(mavlink_message_t* msg) {
+    // Check protocol version
+    checkMavlinkProtocol(msg);
+    
     switch (msg->msgid) {
         case MAVLINK_MSG_ID_HEARTBEAT: {
             mavlink_heartbeat_t heartbeat;
@@ -1447,21 +1557,28 @@ void handle_mavlink_message(mavlink_message_t* msg) {
         }
         
         default:
+            // Log unknown messages occasionally
+            if (millis() % 10000 < 100) {
+                addWebLog("FC: Unknown message ID " + String(msg->msgid), "info");
+            }
             break;
     }
 }
 
 void send_mavlink_command_long(uint16_t command, float param1, float param2, float param3, float param4, float param5, float param6, float param7) {
+    // Use detected IDs if available, otherwise use defaults
+    uint8_t target_system = fc_detected ? fc_system_id : DEFAULT_FC_SYSTEM_ID;
+    uint8_t target_component = fc_detected ? fc_component_id : DEFAULT_FC_COMPONENT_ID;
+    
     if (!fc_detected && command != MAV_CMD_REQUEST_MESSAGE) {
-        Serial.println("MAVLink: Cannot send command - FC not detected");
-        return;
+        addWebLog("MAVLink: Cannot send command - FC not detected, using defaults", "warning");
     }
     
     mavlink_message_t msg;
     uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     mavlink_msg_command_long_pack(
         ESP32_SYSTEM_ID, ESP32_COMPONENT_ID, &msg,
-        fc_system_id, fc_component_id,
+        target_system, target_component,
         command,
         0,
         param1, param2, param3, param4, param5, param6, param7
@@ -1469,7 +1586,7 @@ void send_mavlink_command_long(uint16_t command, float param1, float param2, flo
     uint16_t len = mavlink_msg_to_send_buffer(buffer, &msg);
     MAVLINK_SERIAL_PORT.write(buffer, len);
     messagesSent++;
-    Serial.printf("MAVLink: Sent command %u\n", command);
+    addWebLog("MAVLink: Sent command " + String(command) + " to SYS:" + String(target_system), "mavlink");
 }
 
 void set_flight_mode(uint8_t mode_id) {
@@ -1477,6 +1594,7 @@ void set_flight_mode(uint8_t mode_id) {
 }
 
 void arm_disarm_vehicle(bool arm) {
+    fc_armed_status = arm;
     Serial.printf("MAVLink: Sending %s command\n", arm ? "ARM" : "DISARM");
     send_mavlink_command_long(MAV_CMD_COMPONENT_ARM_DISARM, arm ? 1.0f : 0.0f, 0, 0, 0, 0, 0, 0);
 }
@@ -1493,6 +1611,7 @@ void send_rc_override_values(uint16_t ch1_roll, uint16_t ch2_pitch, uint16_t ch3
     
     mavlink_msg_rc_channels_override_pack(
         ESP32_SYSTEM_ID, ESP32_COMPONENT_ID, &msg,
+
         fc_system_id, fc_component_id,
         ch1_roll, ch2_pitch, ch3_throttle, ch4_yaw,
         ch5, ch6, ch7, ch8,
@@ -1504,3 +1623,4 @@ void send_rc_override_values(uint16_t ch1_roll, uint16_t ch2_pitch, uint16_t ch3
     MAVLINK_SERIAL_PORT.write(buffer, len);
     messagesSent++;
 }
+
