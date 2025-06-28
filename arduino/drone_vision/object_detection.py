@@ -5,8 +5,8 @@ import json
 import time
 
 # ESP32-CAM stream URL (update with your ESP32 IP)
-STREAM_URL = "http://192.168.1.128/stream"  # Change to your ESP32 IP
-DRONE_API_URL = "http://192.168.1.128/cv/action"  # CV API endpoint
+STREAM_URL = "http://172.20.10.9/stream"  # Change to your ESP32 IP
+DRONE_API_URL = "http://172.20.10.9/cv/action"  # CV API endpoint
 
 # Motion detection setup
 bg_subtractor = cv2.createBackgroundSubtractorMOG2()
@@ -20,7 +20,7 @@ prev_frame = None
 def check_stream_availability():
     """Check if the stream is available"""
     try:
-        response = requests.get("http://192.168.1.128/status", timeout=5)
+        response = requests.get("http://172.20.10.9/status", timeout=5)
         if response.status_code == 200:
             status = response.json()
             return status.get('camera', False)
@@ -163,7 +163,7 @@ def detect_motion(frame):
     fg_mask = bg_subtractor.apply(frame_blur, learningRate=0.01)
     
     # Remove shadows (values of 127) from the mask
-    _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY)
+    _, fg_mask = cv2.threshold(fg_mask, 200, 255, cv2.THRESH_BINARY) 
     
     # Remove noise
     kernel = np.ones((5,5), np.uint8) # Create a kernel for morphological operations

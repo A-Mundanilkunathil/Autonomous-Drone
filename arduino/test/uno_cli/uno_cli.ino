@@ -89,7 +89,7 @@ uint8_t stabilize_mode_id = 0;
 
 // Network Configuration
 const char* ssid = "HP";
-const char* password = "4085948901";
+const char* password = "12345678";
 
 AsyncWebServer server(80);
 
