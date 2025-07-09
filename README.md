@@ -16,3 +16,4 @@ ESC
 3.   iterate - IMU gyro scope with Nano..
 4.   Camera calibration after everythihng passes. 
 
+192.168.1.128
