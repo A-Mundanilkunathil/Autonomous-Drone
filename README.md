@@ -17,3 +17,9 @@ ESC 4
 
 192.168.1.128
 
+
+ArduPilot
+Mission Planner: 115200, RCIN
+iBus FS-I6 -> FS-IA6B
+SpeedybeeF405v4:
+R2, 4V5, G
