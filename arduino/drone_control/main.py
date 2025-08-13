@@ -8,6 +8,12 @@ def main():
 
     vehicle.set_mode("STABILIZE")
     vehicle.arm()
+    vehicle.set_throttle_percent(10)
+    vehicle.pitch_forward(80)
+    time.sleep(1)
+    vehicle.center_attitude()
+    vehicle.dec_throttle(50)
+    vehicle.disarm()
     try:
         while True:
             sess.send_heartbeat()
