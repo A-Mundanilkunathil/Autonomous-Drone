@@ -14,6 +14,8 @@ QBRAIN ESC 4 in 1 20A
 
 
 ArduPilot:
--   Mission Planner: 115200, RCIN
--   iBus FS-I6 -> FS-IA6B
--   SpeedybeeF405v4: R2, 4V5, G
+-   Mission Planner: 115200, RCIN, Port 2
+    - iBus FS-I6 transmitter -> FS-IA6B receiver
+    - SpeedybeeF405v4: R2, 4V5, G
+-   Mission Planner: 57600, Mavlink2, Port 6
+    - Telemetry radio: R6, T6, 4V5, G
