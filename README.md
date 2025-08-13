@@ -2,13 +2,8 @@
 
 
 QBRAIN ESC 4 in 1 20A 
-ESC Firmware Minimums: 
-ESC 1 :
-ESC 2 : 
-ESC 3 : 700(min) - 770(lowest start) - 760 : lowest speed : 750 : True Zero. 
-ESC 4
-
-
+-   ESCs Firmware Minimums: 
+    - 700(min) - 770(lowest start) - 760 : lowest speed : 750 : True Zero. 
 
 1. parallel power check
 2.   X - nano - solo power - connect with esp32
@@ -21,4 +16,4 @@ ESC 4
 ArduPilot:
 -   Mission Planner: 115200, RCIN
 -   iBus FS-I6 -> FS-IA6B
--   SpeedybeeF405v4: AR2, 4V5, G
+-   SpeedybeeF405v4: R2, 4V5, G
