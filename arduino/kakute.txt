@@ -1,0 +1,76 @@
+board_name KAKUTEF4V2
+manufacturer_id 
+
+# name
+name Kitty Hawk
+
+# resources
+
+# mixer
+
+# servo
+
+# servo mix
+
+
+# feature
+feature -ANTI_GRAVITY
+feature -DYNAMIC_FILTER
+
+# beeper
+beeper -RX_LOST_LANDING
+beeper -ARMING_GPS_FIX
+beeper -GPS_STATUS
+beeper -RX_SET
+beeper -ACC_CALIBRATION
+beeper -ACC_CALIBRATION_FAIL
+beeper -READY_BEEP
+beeper -DISARM_REPEAT
+beeper -ARMED
+beeper -ON_USB
+beeper -BLACKBOX_ERASE
+beeper -CRASH FLIP
+beeper -CAM_CONNECTION_OPEN
+beeper -CAM_CONNECTION_CLOSED
+
+# beacon
+beacon RX_LOST
+
+# map
+map TAER1234
+
+# serial
+
+# led
+
+# color
+
+# mode_color
+
+# aux
+aux 0 0 1 1925 2100 0 0
+aux 1 1 0 900 1050 0 0
+aux 2 2 0 1400 1600 0 0
+aux 3 28 0 1925 2100 0 0
+
+# adjrange
+
+# rxrange
+
+# vtx
+
+# rxfail
+
+# master
+set acc_calibration = 68,68,77
+set mag_hardware = NONE
+set motor_pwm_protocol = DSHOT600
+set pid_process_denom = 16
+
+# profile
+profile 0
+
+
+# rateprofile
+rateprofile 0
+
