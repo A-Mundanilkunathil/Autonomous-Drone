@@ -25,3 +25,4 @@ Drones:
 -   loki: OpenPilot
 -   hunter_pence: OpenPilot
 -   max_max: OpenPilot
+-   thor: OpenPilot
