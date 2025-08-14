@@ -24,3 +24,4 @@ Drones:
 -   kakute: Betaflight
 -   loki: OpenPilot
 -   hunter_pence: OpenPilot
+-   max_max: OpenPilot
