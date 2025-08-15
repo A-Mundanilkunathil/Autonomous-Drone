@@ -22,6 +22,7 @@ class Vehicle:
         self._last_rc[1] = self.PWM_NEUTRAL  # Pitch
         self._last_rc[2] = self.PWM_MIN  # Throttle
         self._last_rc[3] = self.PWM_NEUTRAL  # Yaw
+        self._last_rc[4:] = [1000]*4  # Aux channels
         
     def set_mode(self, name: str = "STABILIZE"):
         mapping = self.conn.mode_mapping()
@@ -183,3 +184,10 @@ class Vehicle:
         pwm = int(self.PWM_MIN + (pct/100.0)*(self.PWM_MAX - self.PWM_MIN))
         self.set_sticks(throttle=pwm)
         return pwm
+
+    def set_throttle_pwm(self, pwm_value: int):
+        pwm_value = max(1000, min(2000, pwm_value))  # Clamp to valid range
+        self.enable_rc_override()
+        self._last_rc[2] = pwm_value  # Throttle is index 2
+        self._send_rc()
+        return pwm_value
