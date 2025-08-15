@@ -8,7 +8,7 @@ def main():
 
     vehicle.set_mode("STABILIZE")
     vehicle.arm()
-    time.sleep(2)
+    time.sleep(3)
     
     try:
         while True:

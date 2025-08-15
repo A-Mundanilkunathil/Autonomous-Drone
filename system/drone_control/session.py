@@ -25,6 +25,9 @@ class MavSession:
     
     def pump(self):
         message = self.conn.recv_match(blocking=False)
+        if not message:
+            return
+        
         if message.get_type() == "STATUSTEXT":
             txt = getattr(message, "text", b"")
             try:
