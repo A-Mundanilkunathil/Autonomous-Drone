@@ -35,8 +35,8 @@ class VehicleAuto:
         raise RuntimeError("Arm timeout")
     
     def disarm(self, timeout=2):
-        self.c.mav.command_long_send(
-            self.c.target_system, self.c.target_component,
+        self.conn.mav.command_long_send(
+            self.conn.target_system, self.conn.target_component,
             mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
             0, 0, 0, 0, 0, 0, 0, 0
         )
@@ -97,19 +97,19 @@ class VehicleAuto:
         def euler_to_quat(r, p, y):
             # Convert Euler angles (roll, pitch, yaw) to quaternion
             # Roll
-            cr = math.cos(r / 2) 
-            sr = math.sin(r / 2)
+            cr = math.cos(r/2) 
+            sr = math.sin(r/ 2)
             # Pitch
-            cp = math.cos(p / 2)
-            sp = math.sin(p / 2)
+            cp = math.cos(p/2)
+            sp = math.sin(p/2)
             # Yaw
-            cy = math.cos(y / 2)
-            sy = math.sin(y / 2)
+            cy = math.cos(y/2)
+            sy = math.sin(y/2)
             return [
-                cr * cp * cy + sr * sp * sy,
-                sr * cp * cy - cr * sp * sy,
-                cr * sp * cy + sr * cp * sy,
-                cr * cp * sy - sr * sp * cy
+                cr*cp*cy + sr*sp*sy,
+                sr*cp*cy - cr*sp*sy,
+                cr*sp*cy + sr*cp*sy,
+                cr*cp*sy - sr*sp*cy
             ]
         roll = radians(roll_deg)
         pitch = radians(pitch_deg)
