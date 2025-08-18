@@ -163,7 +163,7 @@ class VehicleAuto:
 
         if yaw_deg is None:
             # Hold current yaw
-            att = self.recv_msg('ATTITUDE', timeout=1)
+            att = self.recv_msg('ATTITUDE')
             yaw = att.yaw if att else 0.0
         else: 
             yaw = math.radians(yaw_deg)
@@ -190,11 +190,9 @@ class VehicleAuto:
         self.send_velocity_body(0.0, 0.0, 0.0, yaw_rate_deg_s=0.0)
 
         # Get current thrust estimation
-        msg = self.recv_msg('ACTUATOR_OUTPUTS', timeout=1)
+        msg = self.recv_msg('VFR_HUD')
         if msg:
-            motor_pwms = msg.output
-            thrust = sum(motor_pwms) / len(motor_pwms) 
-            thrust = max(0.3, min(0.7, thrust))
+            thrust = max(0.3, min(0.7, msg.throttle / 100.0))
         else:
             thrust = 0.5
 
