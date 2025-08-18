@@ -200,3 +200,24 @@ class VehicleAuto:
 
         # Hold level attitude with safe thrust
         self.send_attitude(0.0, 0.0, thrust=thrust)
+    
+    def move_forward(self, speed=1.0):
+        self.send_velocity_body(vx=speed, vy=0.0, vz=0.0)
+    
+    def move_backward(self, speed=1.0):
+        self.send_velocity_body(vx=-speed, vy=0.0, vz=0.0)
+        
+    def move_right(self, speed=1.0):
+        self.send_velocity_body(vx=0.0, vy=speed, vz=0.0)
+        
+    def move_left(self, speed=1.0):
+        self.send_velocity_body(vx=0.0, vy=-speed, vz=0.0)
+        
+    def move_up(self, speed=1.0):
+        self.send_velocity_body(vx=0.0, vy=0.0, vz=-speed)
+        
+    def move_down(self, speed=1.0):
+        self.send_velocity_body(vx=0.0, vy=0.0, vz=speed)
+        
+    def rotate(self, yaw_rate_deg_s=30):
+        self.send_velocity_body(vx=0.0, vy=0.0, vz=0.0, yaw_rate_deg_s=yaw_rate_deg_s)
