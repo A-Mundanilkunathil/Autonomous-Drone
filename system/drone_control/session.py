@@ -2,6 +2,7 @@ from pymavlink import mavutil
 import time
 from typing import Optional
 import logging
+import threading
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("MavSession")
@@ -13,6 +14,7 @@ class MavSession:
         self.heartbeat_period = 1 / heartbeat_hz # Heartbeat interval in seconds
         self._m: Optional[mavutil.mavfile] = None # MAVLink connection
         self._last_hb = 0.0 # Last heartbeat time
+        self._hb_timer: Optional[threading.Timer] = None # Heartbeat timer
         
     def connect(self):
         logger.info(f"Connecting {self.port}@{self.baud}...")
@@ -55,7 +57,23 @@ class MavSession:
     def close(self):
         if self._m:
             self._m.close()
+            self.stop_heartbeat()
             logger.info("MAVLink connection closed")
 
     def recv(self, msg_type=None, blocking=True, timeout=1.0):
         return self._m.recv_match(type=msg_type, blocking=blocking, timeout=timeout)
+
+    def start_heartbeat(self):
+        def hb_loop():
+            self.send_heartbeat()
+            self._hb_timer = threading.Timer(self.heartbeat_period, hb_loop, daemon=True)
+            self._hb_timer.start()
+        
+        if not hasattr(self, "_hb_timer") or not self._hb_timer.is_alive():
+            hb_loop()
+            logger.info("Heartbeat thread started")
+    
+    def stop_heartbeat(self):
+        if hasattr(self, "_hb_timer"):
+            self._hb_timer.cancel()
+            logger.info("Heartbeat thread stopped")
