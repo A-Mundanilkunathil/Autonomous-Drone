@@ -7,6 +7,7 @@ class VehicleAuto:
     def __init__(self, session: MavSession):
         self.s = session
         self.conn = session.conn
+        print(f"[INFO] Connected to system {self.conn.target_system} component {self.conn.target_component}")
     
     def recv_msg(self, msg_type=None, timeout=1):
         msg = self.conn.recv_match(type=msg_type, blocking=True, timeout=timeout)
@@ -15,7 +16,7 @@ class VehicleAuto:
     def set_mode(self, name: str):
         mapping = self.conn.mode_mapping()
         if name not in mapping:
-            raise RuntimeError(f"Mode {name} not available. Got: {list(mapping.keys())}")
+            raise RuntimeError(f"[ERROR] Mode {name} not available. Got: {list(mapping.keys())}")
         
         self.conn.mav.set_mode_send(
             self.conn.target_system,
@@ -33,11 +34,12 @@ class VehicleAuto:
         
         end = time.time() + timeout # Wait for arm confirmation
         while time.time() < end:
-            heartbeat = self.recv_msg('HEARTBEAT', timeout=1)
+            heartbeat = self.recv_msg('HEARTBEAT')
             if heartbeat and (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+                print("[INFO] Vehicle armed successfully")
                 return
-        raise RuntimeError("Arm timeout")
-    
+        raise RuntimeError("[ERROR] Arm timeout")
+
     def disarm(self, timeout=5):
         self.conn.mav.command_long_send(
             self.conn.target_system, self.conn.target_component,
@@ -46,44 +48,44 @@ class VehicleAuto:
         )
         end = time.time() + timeout # Wait for disarm confirmation
         while time.time() < end:
-            heartbeat = self.recv_msg('HEARTBEAT', timeout=1)
+            heartbeat = self.recv_msg('HEARTBEAT')
             if heartbeat and not (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+                print("[INFO] Vehicle disarmed successfully")
                 return
-        raise RuntimeError("Disarm timeout")
-    
-    def guided_takeoff(self, alt_m: float, wait=True, timeout=30):
+        raise RuntimeError("[ERROR] Disarm timeout")
+
+    def guided_takeoff(self, target_alt: float, wait=True, timeout=15):
         self.set_mode("GUIDED")
         self.arm()
         self.conn.mav.command_long_send(
             self.conn.target_system,
             self.conn.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
-            0, 0, 0, 0, 0, 0, 0, alt_m
+            0, 0, 0, 0, 0, 0, 0, target_alt
         )
         
-        # Wait for takeoff to complete
-        if wait:
-            end = time.time() + timeout
-            while time.time() < end:
-                alt_msg = self.recv_msg('GLOBAL_POSITION_INT', timeout=1)
-                if alt_msg:
-                    rel_alt = alt_msg.relative_alt / 1000.0  # Convert from mm to m
-                    if rel_alt >= alt_m * 0.9: # 90% of target altitude reached
-                        return
-                time.sleep(0.2)
-        raise RuntimeError("Takeoff timeout")
+        end = time.time() + timeout
+        while time.time() < end:
+            msg = self.recv_msg('GLOBAL_POSITION_INT')
+            if msg and msg.relative_alt >= target_alt * 1000 * 0.95:
+                print(f"[INFO] Takeoff reached {msg.relative_alt / 1000:.1f} m")
+                return
+        raise RuntimeError("[ERROR] Takeoff timeout")
 
-    def land(self):
-        mapping = self.conn.mode_mapping()
-        if "LAND" in mapping:
-            self.set_mode("LAND")
-        else:
-            self.conn.mav.command_long_send(
-                self.conn.target_system,
-                self.conn.target_component,
-                mavutil.mavlink.MAV_CMD_NAV_LAND,
-                0, 0, 0, 0, 0, 0, 0, 0
-            )
+    def land(self, timeout=15):
+        self.conn.mav.command_long_send(
+            self.conn.target_system,
+            self.conn.target_component,
+            mavutil.mavlink.MAV_CMD_NAV_LAND,
+            0, 0, 0, 0, 0, 0, 0, 0
+        )
+        end = time.time() + timeout
+        while time.time() < end:
+            msg = self.recv_msg('GLOBAL_POSITION_INT')
+            if msg and msg.relative_alt <= 500:
+                print("[INFO] Landing complete")
+                return
+        raise RuntimeError("[ERROR] Landing timeout")
             
     def send_velocity_body(self, vx, vy, vz, yaw_rate_deg_s=0.0):
         # Safety clamps
@@ -144,7 +146,7 @@ class VehicleAuto:
 
         if yaw_deg is None:
             # Hold current yaw
-            att = self.conn.recv_match(type='ATTITUDE', blocking=False)
+            att = self.recv_msg('ATTITUDE', timeout=1)
             yaw = att.yaw if att else 0.0
         else: 
             yaw = math.radians(yaw_deg)
