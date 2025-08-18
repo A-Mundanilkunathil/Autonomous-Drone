@@ -7,7 +7,6 @@ class VehicleAuto:
     def __init__(self, session: MavSession):
         self.s = session
         self.conn = session.conn
-        print(f"[INFO] Connected to system {self.conn.target_system} component {self.conn.target_component}")
     
     def recv_msg(self, msg_type=None, timeout=1):
         msg = self.conn.recv_match(type=msg_type, blocking=True, timeout=timeout)

@@ -1,6 +1,10 @@
 from pymavlink import mavutil
 import time
 from typing import Optional
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("MavSession")
 
 class MavSession:
     def __init__(self, port: str = 'COM6', baud: int = 57600, heartbeat_hz: int = 1):
@@ -11,10 +15,10 @@ class MavSession:
         self._last_hb = 0.0 # Last heartbeat time
         
     def connect(self):
-        print(f"Connecting {self.port}@{self.baud}...")
+        logger.info(f"Connecting {self.port}@{self.baud}...")
         self._m = mavutil.mavlink_connection(self.port, baud=self.baud)
         self._m.wait_heartbeat()
-        print(f"Connected to system {self._m.target_system} component {self._m.target_component}")
+        logger.info(f"Connected to system {self._m.target_system} component {self._m.target_component}")
         return self
     
     @property
@@ -24,23 +28,34 @@ class MavSession:
         return self._m
     
     def pump(self):
-        message = self.conn.recv_match(blocking=False)
+        message = self.recv(blocking=False)
         if not message:
             return
         
         if message.get_type() == "STATUSTEXT":
             txt = getattr(message, "text", b"")
             try:
-                print(f"Received STATUSTEXT: {txt.decode()}")
+                logger.info(f"Received STATUSTEXT: {txt.decode()}")
             except Exception:
-                pass
-            
+                logger.info(f"Received STATUSTEXT: {txt}")
+        else:
+            logger.debug(f"Received message: {message}")
+
     def send_heartbeat(self):  
         now = time.time()
         if now - self._last_hb >= self.heartbeat_period:
             self.conn.mav.heartbeat_send(
-                mavutil.mavlink.MAV_TYPE_GCS,  # Ground Control Station
+                mavutil.mavlink.MAV_TYPE_GCS,  # Ground Control Station 
                 mavutil.mavlink.MAV_AUTOPILOT_INVALID,  # Autopilot type
                 0, 0, 0 # System status
             )
             self._last_hb = now
+            logger.debug("Heartbeat sent")
+
+    def close(self):
+        if self._m:
+            self._m.close()
+            logger.info("MAVLink connection closed")
+
+    def recv(self, msg_type=None, blocking=True, timeout=1.0):
+        return self._m.recv_match(type=msg_type, blocking=blocking, timeout=timeout)
