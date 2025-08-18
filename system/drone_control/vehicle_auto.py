@@ -7,6 +7,10 @@ class VehicleAuto:
     def __init__(self, session: MavSession):
         self.s = session
         self.conn = session.conn
+    
+    def recv_msg(self, msg_type=None, timeout=1):
+        msg = self.conn.recv_match(type=msg_type, blocking=True, timeout=timeout)
+        return msg if msg is not None else None
         
     def set_mode(self, name: str):
         mapping = self.conn.mode_mapping()
@@ -29,7 +33,7 @@ class VehicleAuto:
         
         end = time.time() + timeout # Wait for arm confirmation
         while time.time() < end:
-            heartbeat = self.conn.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            heartbeat = self.recv_msg('HEARTBEAT', timeout=1)
             if heartbeat and (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
                 return
         raise RuntimeError("Arm timeout")
@@ -42,7 +46,7 @@ class VehicleAuto:
         )
         end = time.time() + timeout # Wait for disarm confirmation
         while time.time() < end:
-            heartbeat = self.conn.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            heartbeat = self.recv_msg('HEARTBEAT', timeout=1)
             if heartbeat and not (heartbeat.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
                 return
         raise RuntimeError("Disarm timeout")
@@ -61,7 +65,7 @@ class VehicleAuto:
         if wait:
             end = time.time() + timeout
             while time.time() < end:
-                alt_msg = self.conn.recv_match(type='GLOBAL_POSITION_INT', blocking=True, timeout=1)
+                alt_msg = self.recv_msg('GLOBAL_POSITION_INT', timeout=1)
                 if alt_msg:
                     rel_alt = alt_msg.relative_alt / 1000.0  # Convert from mm to m
                     if rel_alt >= alt_m * 0.9: # 90% of target altitude reached
@@ -82,7 +86,6 @@ class VehicleAuto:
             )
             
     def send_velocity_body(self, vx, vy, vz, yaw_rate_deg_s=0.0):
-        
         # Safety clamps
         vx = max(-3.0, min(3.0, vx))
         vy = max(-3.0, min(3.0, vy))
@@ -160,5 +163,7 @@ class VehicleAuto:
             thrust
         )
             
+    def stop(self):
+        self.set_mode("HOLD")
 
         
