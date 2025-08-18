@@ -194,6 +194,7 @@ class VehicleAuto:
         if msg:
             motor_pwms = msg.output
             thrust = sum(motor_pwms) / len(motor_pwms) 
+            thrust = max(0.3, min(0.7, thrust))
         else:
             thrust = 0.5
 
