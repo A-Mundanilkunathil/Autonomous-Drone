@@ -1,42 +1,67 @@
 import cv2
 import numpy as np
 import cv2.aruco as aruco
+from queue import Empty
+from udp_capture import frame_queue
+import sys
 
-# Load camera calibration parameters
-camera_matrix = np.load("camera_matrix.npy")
-dist_coeffs = np.load("dist_coeffs.npy")
+# ---- CONFIG ----
+NPZ_PATH = "system/drone_vision/calibration_images/camera_calib.npz"
+MARKER_LENGTH_M = 0.15
+GET_FRAME_TIMEOUT = 1.0
 
-# ArUco dictionary & marker size
-aruco_dict = aruco.Dictionary_get(aruco.DICT_4X4_50)
-parameters = aruco.DetectorParameters_create()
-marker_length = 0.15 # Marker length in meters
+# ---- Load calibration ----
+try:
+    data = np.load(NPZ_PATH)
+    camera_matrix = data["camera_matrix"]
+    dist_coeffs = data["dist_coeffs"]
+    print(f"Loaded calibration from {NPZ_PATH}")
+except Exception as e:
+    print("Failed to load calibration file:", e)
+    sys.exit(1)
 
-cap = cv2.VideoCapture("http://192.168.1.156/stream")
+# ---- Build ArUco dictionary & detector ----
+aruco_dict = aruco.getPredefinedDictionary(aruco.DICT_4X4_50)
+parameters = aruco.DetectorParameters()
+detector = aruco.ArucoDetector(aruco_dict, parameters)
 
+print("OpenCV version:", cv2.__version__)
+print("Using modern ArUco API with ArucoDetector")
+
+# ---- Main loop ----
+print("Listening for ESP32-CAM stream... (press ESC in window to exit)")
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Failed to capture image")
-        break
-    
-    # Convert to grayscale
+    try:
+        frame_data = frame_queue.get(timeout=GET_FRAME_TIMEOUT)
+    except Empty:
+        continue
+
+    frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        continue
+
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    
+
     # Detect markers
-    corners, ids, _ = aruco.detectMarkers(gray, aruco_dict, parameters=parameters)
-    if ids is not None:
-        # Estimate pose of each marker
-        rvecs, tvecs, _ = aruco.estimatePoseSingleMarkers(corners, marker_length, camera_matrix, dist_coeffs)
-        
-        # Draw markers and axes
+    corners, ids, _ = detector.detectMarkers(gray)
+    if ids is not None and len(corners) > 0:
+        # Estimate pose for each marker
         for i in range(len(ids)):
-            aruco.drawDetectedMarkers(frame, corners)
-            aruco.drawAxis(frame, camera_matrix, dist_coeffs, rvecs[i], tvecs[i], 0.1)
-            print(f"Marker ID: {ids[i][0]}")
-            
-    cv2.imshow("ESP32-CAM Pose", frame)
-    if cv2.waitKey(1) == 27:
+            rvec, tvec, _ = aruco.estimatePoseSingleMarkers(
+                [corners[i]], MARKER_LENGTH_M, camera_matrix, dist_coeffs
+            )
+            rvec = rvec[0][0]
+            tvec = tvec[0][0]
+
+            # Draw marker and axis
+            aruco.drawDetectedMarkers(frame, [corners[i]], ids[i:i+1])
+            aruco.drawAxis(frame, camera_matrix, dist_coeffs, rvec, tvec, MARKER_LENGTH_M * 0.5)
+
+            print(f"Marker ID: {int(ids[i][0])}, rvec: {rvec}, tvec: {tvec}")
+
+    cv2.imshow("ESP32-CAM ArUco Pose", frame)
+    if cv2.waitKey(1) & 0xFF == 27:
         break
-    
-cap.release()
+
 cv2.destroyAllWindows()
+print("Exited cleanly.")

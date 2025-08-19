@@ -3,26 +3,27 @@
 import cv2
 import os
 import time
+from udp_capture import frame_queue
+from queue import Empty
+import numpy as np
 
-STREAM_URL = "http://192.168.4.1/stream"  # Replace with your camera stream URL
-
-SAVE_DIR = "calibration_images"
+SAVE_DIR = "system/drone_vision/calibration_images"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-cap = cv2.VideoCapture(STREAM_URL)  # Open the default camera
-if not cap.isOpened():
-    print("Error: Could not open camera.")
-    exit()
-
 count = 0
+print("Press 's' to save frame, 'ESC' to exit.")
 
 while True:
-    ret, frame = cap.read()
-    if not ret:
-        break
+    try:
+        frame_data = frame_queue.get(timeout=1)
+        frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+        if frame is None:
+            break
+    except Empty:
+        continue
     
     cv2.imshow('Camera Calibration', frame)
-    key = cv2.waitKey(1) # 1 ms delay
+    key = cv2.waitKey(1) & 0xFF
     
     if key == ord('s'):  # Press 's' to save the image
         filename = f"{SAVE_DIR}calib_{count:02d}.jpg"
@@ -32,5 +33,5 @@ while True:
     elif key == 27:  # Press 'ESC' to exit
         break
     
-cap.release()
 cv2.destroyAllWindows()
+print(f"Captured {count} calibration images.")
