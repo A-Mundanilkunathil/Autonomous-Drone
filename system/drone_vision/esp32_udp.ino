@@ -102,14 +102,13 @@ void loop() {
   
   camera_fb_t * fb = esp_camera_fb_get();
   if (!fb) {
-    delay(1);  // Minimal delay
+    delay(1); 
     return;
   }
 
   frame_id++;
-  
-  // Larger packets = fewer UDP packets
-  const int max_data_per_packet = 1432;  
+ 
+  const int max_data_per_packet = 1446;  
   uint16_t total_packets = (fb->len + max_data_per_packet - 1) / max_data_per_packet;
   
   for (uint16_t packet_num = 0; packet_num < total_packets; packet_num++) {
@@ -130,6 +129,5 @@ void loop() {
   }
 
   esp_camera_fb_return(fb);
-  // No delay at all
 }
 

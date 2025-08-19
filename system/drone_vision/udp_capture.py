@@ -4,112 +4,84 @@ import numpy as np
 import struct
 import threading
 from collections import defaultdict
-from queue import Queue
+from queue import Queue, Empty
 
 UDP_IP = "192.168.1.89"
 UDP_PORT = 5005
+HEADER_SIZE = 14  # Size of the header in bytes
 
-# Global frame queue
-frame_queue = Queue(maxsize=5)
+# Frame queue for displaying frames
+frame_queue = Queue(maxsize=3)
+# Store incoming packet per frame
 frames = defaultdict(dict)
 
+# Decode UDP packet header
 def decode_header(data):
-    if len(data) < 14:
+    if len(data) < HEADER_SIZE:
         return None
-    return struct.unpack('<IHHIH', data[:14])
+    return struct.unpack('<IHHIH', data[:HEADER_SIZE])
 
+# UDP receiver thread
 def udp_receiver():
-    """Background thread to receive UDP packets"""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((UDP_IP, UDP_PORT))
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4*1024*1024)  # 4MB buffer
-    
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8*1024*1024) # 8 MB receive buffer
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1) # Allow reuse of address
+
     while True:
         try:
-            data, addr = sock.recvfrom(4096)
+            data, _ = sock.recvfrom(4096)
             
-            header = decode_header(data)
-            if header is None:
+            if len(data) < HEADER_SIZE:
                 continue
-                
-            frame_id, packet_num, total_packets, frame_size, data_size = header
-            payload = data[14:14+data_size]
-            
-            # Validate packet
-            if len(payload) != data_size:
-                print(f"Packet size mismatch: expected {data_size}, got {len(payload)}")
-                continue
+
+            frame_id, packet_num, total_packets, frame_size, data_size = decode_header(data)
+            payload = data[HEADER_SIZE:HEADER_SIZE+data_size]
             
             frames[frame_id][packet_num] = payload
-            
+        
             if len(frames[frame_id]) == total_packets:
-                # Check if all packets are present
-                missing_packets = []
-                for i in range(total_packets):
-                    if i not in frames[frame_id]:
-                        missing_packets.append(i)
-                
-                if missing_packets:
-                    print(f"Frame {frame_id}: Missing packets {missing_packets}")
-                    del frames[frame_id]  # Discard incomplete frame
-                    continue
-                
                 # Reconstruct frame in correct order
-                frame_data = bytearray()
-                for i in range(total_packets):
-                    frame_data.extend(frames[frame_id][i])
-                
+                frame_parts = [frames[frame_id][i] for i in range(total_packets)]
+                frame_data = b''.join(frame_parts)
+
                 # Validate reconstructed frame size
-                if len(frame_data) != frame_size:
-                    print(f"Frame {frame_id}: Size mismatch {len(frame_data)} != {frame_size}")
-                    del frames[frame_id]
-                    continue
-                
-                # Add to display queue (non-blocking)
-                if not frame_queue.full():
-                    frame_queue.put(bytes(frame_data))
-                else:
-                    # Drop oldest frame if queue full
+                if len(frame_data) >= 2 and frame_data[0] == 0xFF and frame_data[1] == 0xD8:
                     try:
-                        frame_queue.get_nowait()
-                        frame_queue.put(bytes(frame_data))
+                        frame_queue.put_nowait(frame_data)
                     except:
-                        pass
-                
+                        try:
+                            frame_queue.get_nowait()  # Remove oldest frame if full
+                            frame_queue.put_nowait(frame_data) # Replace with new frame
+                        except:
+                            pass
+
                 del frames[frame_id]
                 
-                # Cleanup old frames more aggressively
-                if len(frames) > 5:
-                    old_frames = list(frames.keys())[:-3]
+                # Cleanup old frames
+                if frame_id % 10 == 0 and len(frames) > 3:
+                    old_frames = [fid for fid in frames.keys() if fid < frame_id - 3]
                     for fid in old_frames:
                         del frames[fid]
                         
-        except Exception as e:
-            print(f"UDP receiver error: {e}")
+        except:
             continue
 
 # Start receiver thread
 receiver_thread = threading.Thread(target=udp_receiver, daemon=True)
 receiver_thread.start()
-
 print("Listening for ESP32-CAM stream...")
 
 # Main display loop
 while True:
     try:
-        # Get frame from queue (non-blocking)
+        # Get frame from queue 
         frame_data = frame_queue.get_nowait()
-        
-        # Validate JPEG header
-        if len(frame_data) < 2 or frame_data[0] != 0xFF or frame_data[1] != 0xD8:
-            print("Invalid JPEG header")
-            continue
-            
         frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
         if frame is not None:
             cv2.imshow("ESP32-CAM UDP", frame)
-        else:
-            print("Failed to decode JPEG")
+    except Empty:
+        pass
     except:
         pass
     
