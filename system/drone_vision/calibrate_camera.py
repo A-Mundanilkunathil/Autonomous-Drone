@@ -18,7 +18,7 @@ objpoints = []  # 3D points in real world space
 imgpoints = []  # 2D points in image plane
 
 # Load calibration images
-images = glob.glob("system/drone_vision/calibration_images/*.jpg")
+images = glob.glob("system/drone_vision/camera_calibration/calibration_images/*.jpg")
 
 if not images:
     raise FileNotFoundError("No calibration images found in calibration_images/*.jpg")
@@ -62,5 +62,5 @@ print("Camera matrix:\n", camera_matrix)
 print("Distortion coefficients:\n", dist_coeffs)
 
 # Save parameters
-np.savez("system/drone_vision/calibration_images/camera_calib.npz", camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
+np.savez("system/drone_vision/camera_calibration/camera_calib.npz", camera_matrix=camera_matrix, dist_coeffs=dist_coeffs)
 print("Calibration parameters saved to camera_calib.npz")

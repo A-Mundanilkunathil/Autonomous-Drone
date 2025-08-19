@@ -7,7 +7,7 @@ from udp_capture import frame_queue
 from queue import Empty
 import numpy as np
 
-SAVE_DIR = "system/drone_vision/calibration_images"
+SAVE_DIR = "system/drone_vision/camera_calibration/calibration_images"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 count = 0

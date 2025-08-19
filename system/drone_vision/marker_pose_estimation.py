@@ -6,7 +6,7 @@ from udp_capture import frame_queue
 import sys
 
 # ---- CONFIG ----
-NPZ_PATH = "system/drone_vision/calibration_images/camera_calib.npz"
+NPZ_PATH = "system/drone_vision/camera_calibration/camera_calib.npz"
 MARKER_LENGTH_M = 0.15
 GET_FRAME_TIMEOUT = 1.0
 
