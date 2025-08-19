@@ -72,20 +72,21 @@ receiver_thread = threading.Thread(target=udp_receiver, daemon=True)
 receiver_thread.start()
 print("Listening for ESP32-CAM stream...")
 
-# Main display loop
-while True:
-    try:
-        # Get frame from queue 
-        frame_data = frame_queue.get_nowait()
-        frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
-        if frame is not None:
-            cv2.imshow("ESP32-CAM UDP", frame)
-    except Empty:
-        pass
-    except:
-        pass
-    
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+if __name__ == "__main__":
+    # Main display loop
+    while True:
+        try:
+            # Get frame from queue 
+            frame_data = frame_queue.get_nowait()
+            frame = cv2.imdecode(np.frombuffer(frame_data, np.uint8), cv2.IMREAD_COLOR)
+            if frame is not None:
+                cv2.imshow("ESP32-CAM UDP", frame)
+        except Empty:
+            pass
+        except:
+            pass
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-cv2.destroyAllWindows()
+    cv2.destroyAllWindows()
