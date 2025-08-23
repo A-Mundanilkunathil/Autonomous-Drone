@@ -6,7 +6,7 @@ import threading
 from collections import defaultdict
 from queue import Queue, Empty
 
-UDP_IP = "192.168.1.89"
+UDP_IP = "192.168.4.2"
 UDP_PORT = 5005
 HEADER_SIZE = 14  # Size of the header in bytes
 
