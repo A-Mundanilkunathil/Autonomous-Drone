@@ -2,8 +2,8 @@ import time
 from pymavlink import mavutil
 
 # --- Configuration ---
-MAVLINK_PORT = 'COM6'  # Your COM port
-BAUD_RATE = 57600
+MAVLINK_PORT = 'COM4'  # Your COM port
+BAUD_RATE = 115200
 
 # Neutral RC Values
 RC_NEUTRAL = 1500
