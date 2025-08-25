@@ -9,6 +9,7 @@ from queue import Queue, Empty
 UDP_IP = "192.168.4.2"
 UDP_PORT = 5005
 HEADER_SIZE = 14  # Size of the header in bytes
+SOCKET_BUFFER = 4096  # Socket receive buffer size
 
 # Frame queue for displaying frames
 frame_queue = Queue(maxsize=3)
@@ -30,8 +31,8 @@ def udp_receiver():
 
     while True:
         try:
-            data, _ = sock.recvfrom(4096)
-            
+            data, _ = sock.recvfrom(SOCKET_BUFFER)
+
             if len(data) < HEADER_SIZE:
                 continue
 

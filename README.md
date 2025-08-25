@@ -5,10 +5,12 @@ QBRAIN ESC 4 in 1 20A
 192.168.1.128
 
 Wiring:
--   White: M1
--   Green: M2
--   Orange: M3
--   Brown: M4
+-   Red: Battery Voltage
+-   White: GND
+-   Brown: M1 -> Front Right
+-   Orange: M2 -> Front Left
+-   Green: M3 -> Rear Left
+-   Purple: M4 -> Rear Right
 
 ArduPilot:
 -   Radio Receiver
