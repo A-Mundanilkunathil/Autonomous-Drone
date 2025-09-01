@@ -11,8 +11,10 @@ UDP_PORT = 5005
 HEADER_SIZE = 14  # Size of the header in bytes
 SOCKET_BUFFER = 4096  # Socket receive buffer size
 
-# Frame queue for displaying frames
+# Queues for packets and frames
 frame_queue = Queue(maxsize=3)
+raw_packet_queue = Queue(maxsize=500)
+
 # Store incoming packet per frame
 frames = defaultdict(dict)
 
@@ -32,11 +34,23 @@ def udp_receiver():
     while True:
         try:
             data, _ = sock.recvfrom(SOCKET_BUFFER)
-
-            if len(data) < HEADER_SIZE:
+            try:
+                raw_packet_queue.put_nowait(data)
+            except:
                 continue
-
-            frame_id, packet_num, total_packets, frame_size, data_size = decode_header(data)
+        except:
+            continue
+        
+# UDP processor thread
+def packet_processor():
+    while True:
+        try:
+            data = raw_packet_queue.get(timeout=1)
+            header = decode_header(data)
+            if header is None:
+                continue
+            
+            frame_id, packet_num, total_packets, frame_size, data_size = header
             payload = data[HEADER_SIZE:HEADER_SIZE+data_size]
             
             frames[frame_id][packet_num] = payload
@@ -64,13 +78,19 @@ def udp_receiver():
                     old_frames = [fid for fid in frames.keys() if fid < frame_id - 3]
                     for fid in old_frames:
                         del frames[fid]
-                        
+        except Empty:
+            continue
         except:
             continue
 
 # Start receiver thread
 receiver_thread = threading.Thread(target=udp_receiver, daemon=True)
 receiver_thread.start()
+
+# Start processor thread
+processor_thread = threading.Thread(target=packet_processor, daemon=True)
+processor_thread.start()
+
 print("Listening for ESP32-CAM stream...")
 
 if __name__ == "__main__":

@@ -138,6 +138,19 @@ class VehicleAuto:
             yaw_rate # yaw rate (ignored if bit 11 is set)
         )
         
+    def send_position_setpoint(self, x, y, z):
+        self.conn.mav.set_position_target_local_ned_send(
+            int(time.time() * 1e3), # milliseconds
+            self.conn.target_system,
+            self.conn.target_component,
+            mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+            0b0000111111111000,
+            x, y, z,     # Position
+            0, 0, 0,    # Velocity ignored
+            0, 0, 0,    # Acceleration ignored
+            0, 0        # Yaw, Yaw rate ignored
+        )
+        
     def send_attitude(self, roll_deg, pitch_deg, yaw_deg=None, thrust=0.5):
         # Safety clamps
         thrust = max(0.0, min(1.0, thrust))
@@ -182,7 +195,7 @@ class VehicleAuto:
             thrust
         )
             
-    def stop(self):
+    def hold_position(self):
         # Switch to holding mode
         self.set_mode("HOLD")
         
@@ -219,3 +232,59 @@ class VehicleAuto:
         
     def rotate(self, yaw_rate_deg_s=30):
         self.send_velocity_body(vx=0.0, vy=0.0, vz=0.0, yaw_rate_deg_s=yaw_rate_deg_s)
+        
+    def move_diagonal_front_right(self, speed=1.0):
+        self.send_velocity_body(vx=speed, vy=speed, vz=0.0)
+        
+    def move_diagonal_front_left(self, speed=1.0):
+        self.send_velocity_body(vx=speed, vy=-speed, vz=0.0)
+
+    def move_diagonal_back_right(self, speed=1.0):
+        self.send_velocity_body(vx=-speed, vy=speed, vz=0.0)
+
+    def move_diagonal_back_left(self, speed=1.0):
+        self.send_velocity_body(vx=-speed, vy=-speed, vz=0.0)
+ 
+    def return_to_home(self):
+        # Switch to RTL (Return to Launch) mode
+        self.set_mode("RTL")
+        
+    def move_square(self, speed=1.0):
+        self.move_forward(speed)
+        self.move_right(speed)
+        self.move_backward(speed)
+        self.move_left(speed)
+        
+        self.hold_position()
+        
+    def move_circular_arc(self, radius=5.0, speed=1.0, duration=20):
+        angular_velocity = speed / radius # rad/s
+        start_time = time.time()
+        
+        while time.time() - start_time < duration:
+            vx = speed                      # forward velocity
+            vy = radius * angular_velocity  # rightward to curve
+            self.send_velocity_body(vx, vy, 0.0)
+            time.sleep(0.1)
+            
+        self.hold_position()
+        
+    def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
+        # Get starting position
+        pos = self.recv_msg('GLOBAL_POSITION_NED')
+        if not pos:
+            raise RuntimeError("No LOCAL_POSITION_NED message received")
+        
+        xc, yc, z = pos.x, pos.y, pos.z
+        angular_velocity = speed / radius # rad/s
+        start_time = time.time()
+        
+        while time.time() - start_time < duration:
+            t = time.time() - start_time
+            theta = angular_velocity * t
+            x_target = xc + radius * math.cos(theta)
+            y_target = yc + radius * math.sin(theta)
+            self.send_position_setpoint(x_target, y_target, z)
+            time.sleep(update_interval)
+        
+        self.hold_position()
