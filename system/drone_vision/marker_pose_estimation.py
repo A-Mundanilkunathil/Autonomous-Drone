@@ -59,6 +59,8 @@ while True:
                 # Draw marker and axis
                 cv2.aruco.drawDetectedMarkers(frame, corners, ids)
                 cv2.drawFrameAxes(frame, camera_matrix, dist_coeffs, rvec, tvec, MARKER_LENGTH_M * 0.5)
+                # tvec = [x, y, z] # 3D position in meters
+                # rvec = [rx, ry, rz] # 3D rotation in radians
                 print(f"Marker ID: {int(ids[i][0])}, rvec: {rvec.ravel()}, tvec: {tvec.ravel()}")
 
     cv2.imshow("ESP32-CAM ArUco Pose", frame)
