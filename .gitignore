@@ -2,3 +2,4 @@ __pycache__/
 calibration_images/
 .python-version
 .DS_Store
+venv/ 
