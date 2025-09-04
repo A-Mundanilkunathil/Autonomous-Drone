@@ -14,7 +14,12 @@ face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_fronta
 prev_frame = None
 
 def detect_faces(frame):
-    """Fast face detection using OpenCV's Haar Cascade"""
+    """
+    Detect faces in a given frame using OpenCV's Haar Cascade classifier.
+
+    :param frame: A BGR image frame from the camera
+    :return: A list of dictionaries containing the detected face information
+    """
     # Convert to grayscale for faster processing
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
@@ -49,14 +54,39 @@ def detect_faces(frame):
     
     return detected_objects
 
-def detect_with_optical_flow(prev_frame, current_frame):
-    """Track movement using optical flow"""
+def detect_with_farneback_optical_flow(prev_frame, current_frame, scale=0.5):
+    """
+    Detects movement in a given frame using Farneback optical flow.
+
+    The function downscales the frame for faster processing, then calculates
+    the optical flow between the previous and current frames. The flow is then
+    visualized in a small region of the frame. The magnitude of the flow is
+    analyzed to detect significant movement. If movement is detected, a
+    bounding box is drawn around the region with the most movement, and the
+    direction of the movement is annotated.
+
+    :param prev_frame: The previous frame from the camera
+    :param current_frame: The current frame from the camera
+    :param scale: The scale at which to downsample the frames (default: 0.5)
+    :return: A list of dictionaries containing the detected object information
+    """
+    # Downscale frames for faster processing
+    small_prev = cv2.resize(prev_frame, (0, 0), fx=scale, fy=scale)
+    small_curr = cv2.resize(current_frame, (0, 0), fx=scale, fy=scale)
+
     # Convert frames to grayscale
     prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
     curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
     
     # Calculate optical flow
-    flow = cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+    flow = cv2.calcOpticalFlowFarneback(prev_gray, curr_gray, None, 
+                                        pyr_scale=0.5, levels=3, winsize=15, 
+                                        iterations=3, poly_n=5, poly_sigma=1.2,
+                                        flags=0)
+
+    # Scale flow back to original size
+    flow = cv2.resize(flow, (current_frame.shape[1], current_frame.shape[0]))
+    flow *= 1.0 / scale
     
     # Visualize the flow
     magnitude, angle = cv2.cartToPolar(flow[..., 0], flow[..., 1])
@@ -116,8 +146,83 @@ def detect_with_optical_flow(prev_frame, current_frame):
     
     return detected_objects
 
+def detect_with_lucas_kanade_optical_flow(prev_frame, current_frame, feature_params, lk_params, K):
+    """
+    Detects movement in a given frame using the Lucas-Kanade Optical Flow algorithm.
+    
+    The function first detects features in the previous frame, then tracks them in the current frame using the Lucas-Kanade Optical Flow algorithm. It then computes an Essential matrix with RANSAC, and uses it to recover the camera pose. The points with valid tracking are returned, as well as the computed pose and a visualization of the tracked points.
+    
+    :param prev_frame: The previous frame from the camera
+    :param current_frame: The current frame from the camera
+    :param feature_params: Parameters for feature detection
+    :param lk_params: Parameters for Lucas-Kanade Optical Flow
+    :param K: The camera intrinsic matrix
+    :return: A dictionary containing the detected object information
+    """
+    # Convert to grayscale
+    prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
+    curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
+
+    # Detect features if none exist
+    prev_pts = cv2.goodFeaturesToTrack(prev_gray, mask=None, **feature_params)
+
+    if prev_pts is None:
+        return {
+            "R": np.eye(3),
+            "t": np.zeros((3, 1)),
+            "tracked_points": np.array([]),
+            "frame_vis": current_frame
+        }
+    
+    # Track points with Lucas-Kanade Optical Flow
+    curr_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, prev_pts, None, **lk_params)
+
+    # Keep only valid points
+    good_prev = prev_pts[status.squeeze() == 1]
+    good_curr = curr_pts[status.squeeze() == 1]
+
+    # Need at least 8 points to compute Essential matrix
+    if len(good_prev) < 8: 
+        return {
+            "R": np.eye(3),
+            "t": np.zeros((3, 1)),
+            "tracked_points": np.array([]),
+            "frame_vis": current_frame
+        }
+    
+    # Compute Essential matrix with RANSAC
+    E, mask = cv2.findEssentialMat(good_curr, good_prev, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+    if E is None:
+        return {
+            "R": np.eye(3),
+            "t": np.zeros((3, 1)),
+            "tracked_points": np.array([]),
+            "frame_vis": current_frame
+        }
+    
+    _, R, t, mask_pose = cv2.recoverPose(E, good_curr, good_prev, K)
+
+    # Visualization: draw tracks
+    vis = current_frame.copy()
+    for (x, y) in good_curr:
+        cv2.circle(vis, (int(x), int(y)), 3, (0, 255, 0), -1)
+
+    return {
+        "R": R,
+        "t": t,
+        "tracked_points": good_curr,
+        "frame_vis": vis
+    }
+
 def detect_motion(frame):
-    """Improved motion detection with better filtering"""
+    """
+    Detects motion in a given frame using background subtraction and contour detection.
+    
+    The function applies a background subtractor (MOG2) to the frame to detect foreground pixels. It then applies thresholding to remove shadows, and erosion/dilation to remove noise. Contours are found in the resulting mask, and filtered to remove small detections. The remaining contours are returned as detected objects, with a confidence score based on the area of the contour.
+    
+    :param frame: The current frame from the camera
+    :return: A list of detected objects with their bounding boxes and confidence scores
+    """
     # First, resize frame for faster processing 
     frame_resized = cv2.resize(frame, (320, 240))
     
@@ -176,7 +281,23 @@ def detect_motion(frame):
     return detected_objects
 
 def detect_colors(frame):
-    """Simple color-based object detection"""
+    """
+    Detect colored objects in the frame.
+
+    This function detects objects in the frame with a color that matches one of the predefined color ranges.
+    The color ranges are defined as (lower, upper) HSV values. The function returns a list of detected objects,
+    each represented as a dictionary with the keys 'label', 'confidence', 'bbox', and 'center'.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        The input frame to detect objects in.
+
+    Returns
+    -------
+    detected_objects : list of dict
+        A list of detected objects, each represented as a dictionary with the keys 'label', 'confidence', 'bbox', and 'center'.
+    """
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     
     # Define color ranges
@@ -219,7 +340,21 @@ def detect_colors(frame):
     return detected_objects
 
 def detect_edges_contours(frame):
-    """Detect objects using edge detection and contours"""
+    """
+    Detect objects in the frame by finding contours after edge detection.
+
+    This function detects objects by first converting the frame to grayscale, then applying a Gaussian blur, followed by edge detection using the Canny algorithm. It then finds contours in the resulting image and filters them based on their area and aspect ratio. The function returns a list of detected objects, each represented as a dictionary with the keys 'label', 'confidence', 'bbox', and 'center'.
+
+    Parameters
+    ----------
+    frame : numpy.ndarray
+        The input frame to detect objects in.
+
+    Returns
+    -------
+    detected_objects : list of dict
+        A list of detected objects, each represented as a dictionary with the keys 'label', 'confidence', 'bbox', and 'center'.
+    """
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     
     # Apply Gaussian blur
@@ -256,7 +391,24 @@ def detect_edges_contours(frame):
     return detected_objects
 
 def track_object(detected_objects, frame_center):
-    """Track the largest/closest object and return movement info"""
+    """
+    Determine the movement command to move the drone to center the detected object.
+
+    Parameters
+    ----------
+    detected_objects : list of dict
+        A list of detected objects, each represented as a dictionary with the keys 'label', 'confidence', 'bbox', and 'center'.
+    frame_center : tuple of int
+        The center coordinates of the frame (x, y).
+
+    Returns
+    -------
+    command : str
+        The movement command for the drone ("left", "right", "up", "down", or "hover").
+    largest_obj : dict
+        The largest detected object represented as a dictionary with the keys 'label', 'confidence', 'bbox', and 'center'.
+    """
+    
     if not detected_objects:
         return None
     
