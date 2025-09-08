@@ -1,15 +1,29 @@
 import time
 from session import MavSession
 from vehicle import Vehicle
+from vehicle_auto import VehicleAuto
 
 def main():
-    sess = MavSession().connect()
-    vehicle = Vehicle(sess)
+    sess = MavSession(port="COM6", baud=57600).connect()
+    # vehicle = Vehicle(sess)
+    auto = VehicleAuto(sess)
 
-    vehicle.set_mode("STABILIZE")
-    vehicle.arm()
+    # vehicle.set_mode("STABILIZE")
+    # vehicle.arm()
+
+    # Hearbeat & Arm 
+    sess.start_heartbeat()
+    auto.arm()
     time.sleep(3)
-    
+    auto.disarm()
+
+    # Guided Takeoff & Land
+    auto.arm()
+    auto.guided_takeoff(1.0)
+    time.sleep(2)
+    auto.land()
+    auto.disarm()
+
     try:
         while True:
             sess.send_heartbeat()
@@ -19,7 +33,8 @@ def main():
         print("Stopping drone control...")
     finally:
         try:
-            vehicle.disarm()
+            # vehicle.disarm()
+            auto.disarm()
         except Exception as e:
             print(f"Error during disarm: {e}")
 

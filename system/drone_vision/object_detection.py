@@ -516,7 +516,7 @@ def main():
             mode_name = "Edge Detection"
         elif detection_mode == 5:
             if prev_frame is not None:
-                detected_objects = detect_with_optical_flow(prev_frame, frame)
+                detected_objects = detect_with_lucas_kanade_optical_flow(prev_frame, frame)
                 mode_name = "Optical Flow"
             else:
                 detected_objects = []
