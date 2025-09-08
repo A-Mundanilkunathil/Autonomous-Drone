@@ -60,7 +60,7 @@ def packet_processor():
                 frame_parts = [frames[frame_id][i] for i in range(total_packets)]
                 frame_data = b''.join(frame_parts)
 
-                # Validate reconstructed frame size
+                # Validate reconstructed frame size (0xFFD8 = JPEG header)
                 if len(frame_data) >= 2 and frame_data[0] == 0xFF and frame_data[1] == 0xD8:
                     try:
                         frame_queue.put_nowait(frame_data)
