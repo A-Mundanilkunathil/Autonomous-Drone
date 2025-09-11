@@ -14,7 +14,8 @@ class MavSession:
         self.heartbeat_period = 1 / heartbeat_hz # Heartbeat interval in seconds
         self._m: Optional[mavutil.mavfile] = None # MAVLink connection
         self._last_hb = 0.0 # Last heartbeat time
-        self._hb_timer: Optional[threading.Timer] = None # Heartbeat timer
+        self._hb_thread: Optional[threading.Thread] = None
+        self._stop_hb_event = threading.Event()
         
     def connect(self):
         logger.info(f"Connecting {self.port}@{self.baud}...")
@@ -64,16 +65,24 @@ class MavSession:
         return self._m.recv_match(type=msg_type, blocking=blocking, timeout=timeout)
 
     def start_heartbeat(self):
-        def hb_loop():
+        if self._hb_thread and self._hb_thread.is_alive():
+            logger.warning("Heartbeat thread is already running.")
+            return
+
+        self._stop_hb_event.clear()
+        self._hb_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._hb_thread.start()
+        logger.info("Heartbeat thread started")
+
+    def _heartbeat_loop(self):
+        """Main loop for the heartbeat thread."""
+        while not self._stop_hb_event.is_set():
             self.send_heartbeat()
-            self._hb_timer = threading.Timer(self.heartbeat_period, hb_loop, daemon=True)
-            self._hb_timer.start()
-        
-        if not hasattr(self, "_hb_timer") or not self._hb_timer.is_alive():
-            hb_loop()
-            logger.info("Heartbeat thread started")
+            self._stop_hb_event.wait(self.heartbeat_period)
     
     def stop_heartbeat(self):
-        if hasattr(self, "_hb_timer"):
-            self._hb_timer.cancel()
+        if self._hb_thread and self._hb_thread.is_alive():
+            self._stop_hb_event.set()
+            self._hb_thread.join(timeout=self.heartbeat_period * 2)
             logger.info("Heartbeat thread stopped")
+        self._hb_thread = None

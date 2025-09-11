@@ -13,13 +13,9 @@ def main():
 
     # Hearbeat & Arm 
     sess.start_heartbeat()
-    auto.arm()
-    time.sleep(3)
-    auto.disarm()
 
     # Guided Takeoff & Land
-    auto.arm()
-    auto.guided_takeoff(1.0)
+    auto.guided_takeoff(5.0)
     time.sleep(2)
     auto.land()
     auto.disarm()

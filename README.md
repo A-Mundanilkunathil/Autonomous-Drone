@@ -20,6 +20,8 @@ ArduPilot:
 -   Mavlink Receiver  
     - Mission Planner: 57600, Mavlink2, Port 6
     - SpeedybeeF405v4: R6, T6, 4V5, G
+-   GPS
+    - Mission Planner:115200,GPS
 
 Drones:
 -   kakute: Betaflight
