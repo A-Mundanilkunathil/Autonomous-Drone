@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y \
 RUN wget https://packages.osrfoundation.org/gazebo.gpg -O /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
 RUN echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
 
-# Update and install Gazebo (try different versions)
+# Update and install Gazebo 
 RUN apt-get update && apt-get install -y \
     gz-garden || apt-get install -y ignition-gazebo6 || apt-get install -y gazebo11 \
     && rm -rf /var/lib/apt/lists/*
@@ -45,14 +45,13 @@ RUN apt-get update && apt-get install -y \
     xfonts-75dpi \
     xfonts-100dpi \
     net-tools \
-    glx-utils \
     mesa-utils-extra \
     libegl1-mesa \
     libgl1-mesa-glx \
     libglu1-mesa \
     && rm -rf /var/lib/apt/lists/*
 
-# Create VNC password file (optional, for basic security)
+# Create VNC password file
 RUN mkdir -p /root/.vnc && \
     x11vnc -storepasswd gazebo123 /root/.vnc/passwd
 
@@ -62,11 +61,9 @@ WORKDIR /gazebo
 # Copy web server script
 COPY web_server.py /gazebo/
 COPY start.sh /gazebo/
-COPY test_vnc.sh /gazebo/
-COPY test_desktop.sh /gazebo/
 
 # Make scripts executable
-RUN chmod +x /gazebo/start.sh /gazebo/test_vnc.sh /gazebo/test_desktop.sh
+RUN chmod +x /gazebo/start.sh 
 
 # Expose ports
 EXPOSE 8080 7681 11345 6080 5900
