@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 from queue import Empty
-from udp_capture import frame_queue
+from src.perception.streams.udp_capture import frame_queue
 
 # Motion detection setup
 bg_subtractor = cv2.createBackgroundSubtractorMOG2()

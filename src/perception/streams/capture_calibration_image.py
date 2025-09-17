@@ -3,7 +3,7 @@
 import cv2
 import os
 import time
-from udp_capture import frame_queue
+from src.perception.streams.udp_capture import frame_queue
 from queue import Empty
 import numpy as np
 

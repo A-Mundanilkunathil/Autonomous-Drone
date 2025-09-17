@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from queue import Empty
-from udp_capture import frame_queue
+from src.perception.streams.udp_capture import frame_queue
 import sys
 
 # ---- CONFIG ----

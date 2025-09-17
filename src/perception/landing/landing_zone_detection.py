@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 import requests
-from udp_capture import frame_queue
+from src.perception.streams.udp_capture import frame_queue
 from queue import Empty
 
 # Load predefined dictionary
