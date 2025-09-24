@@ -3,3 +3,4 @@ opencv-python
 requests
 pymavlink
 websockets==11.0.3
+pyserial
