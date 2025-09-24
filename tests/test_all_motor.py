@@ -2,7 +2,7 @@ from pymavlink import mavutil
 import time
 
 # ---------------- CONFIG ----------------
-PORT = 'COM6'   # e.g. 'COM6' on Windows
+PORT = '/dev/tty.usbserial-0001'   # e.g. 'COM6' on Windows
 BAUD = 57600
 MOTOR_COUNT = 4           # number of motors on your frame
 USE_PWM = True            # True = use PWM (1000–2000), False = use percent (0–100)

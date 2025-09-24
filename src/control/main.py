@@ -4,7 +4,7 @@ from vehicle import Vehicle
 from vehicle_auto import VehicleAuto
 
 def main():
-    sess = MavSession(port="COM6", baud=57600).connect()
+    sess = MavSession(port="/dev/tty.usbserial-0001", baud=57600).connect()
     # vehicle = Vehicle(sess)
     auto = VehicleAuto(sess)
 
