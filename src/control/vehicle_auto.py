@@ -14,6 +14,16 @@ class VehicleAuto:
     
     def recv_msg(self, msg_type=None, timeout=1.0):
         return self.s.recv(msg_type, timeout=timeout)
+    
+    def wait_mode(self, name, timeout=3.0):
+        mapping = self.conn.mode_mapping()
+        want = mapping[name]
+        end = time.time() + timeout
+        while time.time() < end:
+            hb = self.recv_msg('HEARTBEAT', timeout=0.3)
+            if hb and getattr(hb, 'custom_mode', None) == want:
+                return True
+        raise RuntimeError(f"Mode change to {name} timed out")
         
     def set_mode(self, name: str):
         mapping = self.conn.mode_mapping()
@@ -26,6 +36,19 @@ class VehicleAuto:
             mapping[name]
         )
 
+        self.wait_mode(name, timeout=3.0)
+
+    def wait_command_ack(self, cmd, timeout=3.0):
+        end = time.time() + timeout
+        while time.time() < end:
+            ack = self.recv_msg('COMMAND_ACK', timeout=0.3)
+            if ack and ack.command == cmd:
+                if ack.result not in (mavutil.mavlink.MAV_RESULT_ACCEPTED,
+                                      mavutil.mavlink.MAV_RESULT_IN_PROGRESS):
+                    raise RuntimeError(f"Command {cmd} failed: {ack.result}")
+                return
+        raise RuntimeError(f"No COMMAND_ACK for {cmd}")
+
     def arm(self, wait=True, timeout=5):
         self.conn.mav.command_long_send(
             self.conn.target_system,
@@ -34,6 +57,7 @@ class VehicleAuto:
             0, 1, 0, 0, 0, 0, 0, 0
         )
         
+        self.wait_command_ack(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, timeout=3.0)
         if not wait:
             return
         
@@ -52,6 +76,7 @@ class VehicleAuto:
             0, 0, 0, 0, 0, 0, 0, 0
         )
         
+        self.wait_command_ack(mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, timeout=3.0)
         if not wait:
             return
         
@@ -73,6 +98,7 @@ class VehicleAuto:
             0, 0, 0, 0, 0, 0, 0, target_alt
         )
         
+        self.wait_command_ack(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, timeout=3.0)
         if not wait:
             return
         
@@ -92,6 +118,7 @@ class VehicleAuto:
             0, 0, 0, 0, 0, 0, 0, 0
         )
         
+        self.wait_command_ack(mavutil.mavlink.MAV_CMD_NAV_LAND, timeout=3.0)
         if not wait:
             return
         
@@ -104,6 +131,12 @@ class VehicleAuto:
         raise RuntimeError("Landing timeout")
 
     def send_velocity_body(self, vx, vy, vz, yaw_rate_deg_s=0.0):
+        """Stream a BODY_NED velocity setpoint (m/s) and yaw rate (deg/s).
+        BODY_NED axes: 
+            +x: forward
+            +y: right
+            +z: down
+        """
         # Safety clamps
         vx = max(-3.0, min(3.0, vx))
         vy = max(-3.0, min(3.0, vy))
@@ -126,7 +159,7 @@ class VehicleAuto:
         type_mask = ignore_pos | ignore_accel | ignore_force | ignore_yaw
             
         self.conn.mav.set_position_target_local_ned_send(
-            int(time.time() * 1e3), # milliseconds
+            0, # ms, 0 = ignored
             self.conn.target_system,
             self.conn.target_component,
             mavutil.mavlink.MAV_FRAME_BODY_NED,
@@ -140,7 +173,7 @@ class VehicleAuto:
         
     def send_position_setpoint(self, x, y, z):
         self.conn.mav.set_position_target_local_ned_send(
-            int(time.time() * 1e3), # milliseconds
+            0, # ms, 0 = ignored
             self.conn.target_system,
             self.conn.target_component,
             mavutil.mavlink.MAV_FRAME_LOCAL_NED,
@@ -186,7 +219,7 @@ class VehicleAuto:
         # Ignore all body rates
         typemask = (1<<0) | (1<<1) | (1<<2) # ignore roll, pitch, yaw rates
         self.conn.mav.set_attitude_target_send(
-            int(time.time() * 1e6), # microseconds
+            0, # ms, 0 = ignored
             self.conn.target_system,
             self.conn.target_component,
             typemask,
@@ -197,54 +230,57 @@ class VehicleAuto:
             
     def hold_position(self):
         # Switch to holding mode
-        self.set_mode("HOLD")
+        self.set_mode("LOITER")
         
-        # Send zero velocities to stop motion
-        self.send_velocity_body(0.0, 0.0, 0.0, yaw_rate_deg_s=0.0)
-
-        # Get current thrust estimation
-        msg = self.recv_msg('VFR_HUD')
-        if msg:
-            thrust = max(0.3, min(0.7, msg.throttle / 100.0))
-        else:
-            thrust = 0.5
-
-        # Hold level attitude with safe thrust
-        self.send_attitude(0.0, 0.0, thrust=thrust)
+        for _ in range(5):
+            # Send zero velocities to stop motion
+            self.send_velocity_body(0.0, 0.0, 0.0, yaw_rate_deg_s=0.0)
+            time.sleep(0.1)
     
-    def move_forward(self, speed=1.0):
-        self.send_velocity_body(vx=speed, vy=0.0, vz=0.0)
+    def _stream_velocity_body(self, vx, vy, vz, yaw_rate_deg_s=0.0, duration=2.0, rate_hz=10):
+        rate_hz = max(1, rate_hz) # Ensure rate is at least 1
+        dt = 1.0 / rate_hz
+        t_end = time.time() + duration
+        while time.time() < t_end:
+            self.send_velocity_body(vx, vy, vz, yaw_rate_deg_s=yaw_rate_deg_s)
+            time.sleep(dt)
+
+    def move_forward(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=speed, vy=0.0, vz=0.0, duration=duration, rate_hz=rate_hz)
+
+    def move_backward(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=-speed, vy=0.0, vz=0.0, duration=duration, rate_hz=rate_hz)
+        
+    def move_right(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=0.0, vy=speed, vz=0.0, duration=duration, rate_hz=rate_hz)
+        
+    def move_left(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=0.0, vy=-speed, vz=0.0, duration=duration, rate_hz=rate_hz)
+        
+    def move_up(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=0.0, vy=0.0, vz=-speed, duration=duration, rate_hz=rate_hz)
+
+    def move_down(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=0.0, vy=0.0, vz=speed, duration=duration, rate_hz=rate_hz)
+        
+    def rotate(self, yaw_rate_deg_s=30, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(vx=0.0, vy=0.0, vz=0.0, yaw_rate_deg_s=yaw_rate_deg_s, duration=duration, rate_hz=rate_hz)
+        
+    def move_diagonal_front_right(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, speed, 0.0, duration=duration, rate_hz=rate_hz)
+
+    def move_diagonal_front_left(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, -speed, 0.0, duration=duration, rate_hz=rate_hz)
+
+    def move_diagonal_back_right(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, speed, 0.0, duration=duration, rate_hz=rate_hz)
+
+    def move_diagonal_back_left(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, -speed, 0.0, duration=duration, rate_hz=rate_hz)
     
-    def move_backward(self, speed=1.0):
-        self.send_velocity_body(vx=-speed, vy=0.0, vz=0.0)
+    def stop(self, duration=0.3, rate_hz=10):
+        self._stream_velocity_body(vx=0.0, vy=0.0, vz=0.0, duration=duration, rate_hz=rate_hz)
         
-    def move_right(self, speed=1.0):
-        self.send_velocity_body(vx=0.0, vy=speed, vz=0.0)
-        
-    def move_left(self, speed=1.0):
-        self.send_velocity_body(vx=0.0, vy=-speed, vz=0.0)
-        
-    def move_up(self, speed=1.0):
-        self.send_velocity_body(vx=0.0, vy=0.0, vz=-speed)
-        
-    def move_down(self, speed=1.0):
-        self.send_velocity_body(vx=0.0, vy=0.0, vz=speed)
-        
-    def rotate(self, yaw_rate_deg_s=30):
-        self.send_velocity_body(vx=0.0, vy=0.0, vz=0.0, yaw_rate_deg_s=yaw_rate_deg_s)
-        
-    def move_diagonal_front_right(self, speed=1.0):
-        self.send_velocity_body(vx=speed, vy=speed, vz=0.0)
-        
-    def move_diagonal_front_left(self, speed=1.0):
-        self.send_velocity_body(vx=speed, vy=-speed, vz=0.0)
-
-    def move_diagonal_back_right(self, speed=1.0):
-        self.send_velocity_body(vx=-speed, vy=speed, vz=0.0)
-
-    def move_diagonal_back_left(self, speed=1.0):
-        self.send_velocity_body(vx=-speed, vy=-speed, vz=0.0)
- 
     def return_to_home(self):
         # Switch to RTL (Return to Launch) mode
         self.set_mode("RTL")
@@ -271,7 +307,7 @@ class VehicleAuto:
         
     def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
         # Get starting position
-        pos = self.recv_msg('GLOBAL_POSITION_NED')
+        pos = self.recv_msg('LOCAL_POSITION_NED')
         if not pos:
             raise RuntimeError("No LOCAL_POSITION_NED message received")
         

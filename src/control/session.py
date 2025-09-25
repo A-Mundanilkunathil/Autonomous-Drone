@@ -57,8 +57,8 @@ class MavSession:
 
     def close(self):
         if self._m:
-            self._m.close()
             self.stop_heartbeat()
+            self._m.close()
             logger.info("MAVLink connection closed")
 
     def recv(self, msg_type=None, blocking=True, timeout=1.0):
@@ -77,7 +77,10 @@ class MavSession:
     def _heartbeat_loop(self):
         """Main loop for the heartbeat thread."""
         while not self._stop_hb_event.is_set():
-            self.send_heartbeat()
+            try:
+                self.send_heartbeat()
+            except Exception as e:
+                logger.warning(f"Heartbeat send failed: {e}")
             self._stop_hb_event.wait(self.heartbeat_period)
     
     def stop_heartbeat(self):
