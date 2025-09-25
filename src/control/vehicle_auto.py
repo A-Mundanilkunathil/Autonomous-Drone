@@ -7,7 +7,53 @@ log = logging.getLogger("VehicleAuto")
 class VehicleAuto(VehicleMotion):
     """High-level behaviors composed from motion + base primitives."""
 
+    # Helpers
+    def _meters_between(self, lat1, lon1, lat2, lon2) -> float:
+        # Equirectangular approximation
+        R = 6378137.0 # Earth radius in meters
+        x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) * 0.5))
+        y = math.radians(lat2 - lat1)
+        return math.sqrt(x*x + y*y) * R
+
     # Actions
+    def goto_latlon(self,
+                    lat_deg: float,
+                    lon_deg: float,
+                    alt_rel_m: float, # altitude relative to home
+                    pos_tol_m: float = 1.5, # position tolerance
+                    alt_tol_m: float = 0.7, # altitude tolerance
+                    rate_hz: float = 10.0,
+                    timeout: float = 90.0) -> None:
+        """
+        Fly to a global (lat,lon,alt_rel) in GUIDED by streaming GLOBAL_RELATIVE_ALT_INT position targets.
+        """
+        # Guided mode
+        self.set_mode("GUIDED")
+        
+        dt = 1.0 / max(1.0, rate_hz)
+        end = time.time() + timeout
+        while time.time() < end:
+            # Stream target position
+            self.send_position_target_global(lat_deg, lon_deg, alt_rel_m)
+
+            # Check current position
+            gpi = self.recv_msg('GLOBAL_POSITION_INT', timeout=0.2)
+            if gpi:
+                cur_lat = gpi.lat / 1e7
+                cur_lon = gpi.lon / 1e7
+                cur_alt = gpi.relative_alt / 1000.0 # mm -> m
+
+                dist_xy = self._meters_between(cur_lat, cur_lon, lat_deg, lon_deg)
+                alt_err = abs(cur_alt - alt_rel_m)
+
+                if dist_xy < pos_tol_m and alt_err < alt_tol_m:
+                    return
+                
+            time.sleep(dt)
+
+        self.hold_position()
+        raise RuntimeError("goto_latlon timeout")
+
     def guided_takeoff(self, target_alt: float, wait: bool=True, timeout: float=30.0) -> None:
         self.set_mode("GUIDED")
         self.arm()

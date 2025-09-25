@@ -46,6 +46,35 @@ class VehicleMotion(VehicleBase):
             x, y, z,
             0,0,0,  0,0,0,  0,0
         )
+    
+    def send_position_target_global(self, lat_deg: float, lon_deg: float, alt_rel_m: float) -> None:
+        """
+        Send a GLOBAL_RELATIVE_ALT_INT position target (lat/lon in degrees, alt in meters AGL).
+        Uses position-only mask (ignores vel/accel/yaw). Stream at 2–10 Hz until reached.
+        """
+        lat_i = int(lat_deg * 1e7)
+        lon_i = int(lon_deg * 1e7)
+        alt = float(alt_rel_m)
+
+        # Use only position (ignore velocity, accel, yaw, yaw rate)
+        type_mask = (
+            (1<<3) | (1<<4) | (1<<5) | # ignore vx, vy, vz
+            (1<<6) | (1<<7) | (1<<8) |  # ignore ax,ay,az
+            (1<<9) |                     # is_force flag
+            (1<<10)| (1<<11)             # ignore yaw, yaw_rate
+        )
+
+        self.conn.mav.set_position_target_global_int_send(
+            0,  # time_boot_ms ignored
+            self.conn.target_system, 
+            self.conn.target_component,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+            type_mask,
+            lat_i, lon_i, alt,
+            0,0,0,  
+            0,0,0,  
+            0,0
+        )
 
     def send_attitude(self, roll_deg, pitch_deg, yaw_deg=None, thrust=0.5) -> None:
         thrust = max(0.0, min(1.0, thrust))
