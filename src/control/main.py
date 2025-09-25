@@ -9,25 +9,30 @@ def main():
     # Hearbeat & Arm 
     sess.start_heartbeat()
 
-    # Guided Takeoff & Land
-    auto.guided_takeoff(5.0)
-    time.sleep(2)
-    auto.land()
-    auto.disarm()
-
     try:
-        while True:
-            sess.send_heartbeat()
-            sess.pump()
-            time.sleep(0.1)
+        auto.guided_takeoff(3.0) # Takeoff to 3m
+        
+        # Hover for 2 seconds
+        time.sleep(2.0)
+        
+        # Small forward then stop and hold
+        auto.move_backward(speed=0.5, duration=2.0, rate_hz=10)
+        auto.stop(duration=0.3, rate_hz=10)
+        auto.hold_position()
+        
+        # Land then disarm
+        auto.land()
+        auto.disarm()
+
     except KeyboardInterrupt:
         print("Stopping drone control...")
     finally:
         try:
-            # vehicle.disarm()
-            auto.disarm()
+            auto.disarm(wait=True)
         except Exception as e:
-            print(f"Error during disarm: {e}")
-
+            print(f"Failed to disarm: {e}")
+        sess.stop_heartbeat()
+        sess.close()
+        
 if __name__ == "__main__":
     main()
