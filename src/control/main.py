@@ -1,15 +1,10 @@
 import time
 from session import MavSession
-from vehicle import Vehicle
 from vehicle_auto import VehicleAuto
 
 def main():
     sess = MavSession(port="/dev/tty.usbserial-0001", baud=57600).connect()
-    # vehicle = Vehicle(sess)
     auto = VehicleAuto(sess)
-
-    # vehicle.set_mode("STABILIZE")
-    # vehicle.arm()
 
     # Hearbeat & Arm 
     sess.start_heartbeat()

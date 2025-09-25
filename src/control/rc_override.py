@@ -2,7 +2,8 @@ from pymavlink import mavutil
 import time
 from session import MavSession
  
-class Vehicle:
+class RCOverrideController:
+    """Manual RC override (sticks) control."""
     def __init__(self, session: MavSession, wait_attempts: int = 10):
         self.s = session
         self.conn = session.conn
