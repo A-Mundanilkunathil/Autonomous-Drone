@@ -11,7 +11,7 @@ class VehicleAuto(VehicleMotion):
     def _meters_between(self, lat1, lon1, lat2, lon2) -> float:
         # Equirectangular approximation
         R = 6378137.0 # Earth radius in meters
-        x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) * 0.5))
+        x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
         y = math.radians(lat2 - lat1)
         return math.sqrt(x*x + y*y) * R
 
