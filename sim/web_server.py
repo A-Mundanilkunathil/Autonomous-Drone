@@ -78,7 +78,7 @@ class GazeboWebServer:
             return False
     
     async def handle_websocket(self, websocket, path):
-        """Handle WebSocket connections - FIXED signature"""
+        """Handle WebSocket connections"""
         self.clients.add(websocket)
         try:
             print(f"Client connected: {websocket.remote_address}")
@@ -149,7 +149,7 @@ async def main():
     http_thread.daemon = True
     http_thread.start()
     
-    # Start WebSocket server - PROPERLY FIXED call
+    # Start WebSocket server 
     print("Starting WebSocket server on port 7681")
     async with websockets.serve(gazebo_server.handle_websocket, "0.0.0.0", 7681):
         await asyncio.Future()  # Run forever
