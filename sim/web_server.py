@@ -12,6 +12,18 @@ class GazeboWebServer:
     def __init__(self):
         self.gazebo_process = None
         self.clients = set()
+        self.stdout_thread = None
+        self.stderr_thread = None
+
+    def _stream_output(self, stream, label):
+        """Continuously read a subprocess stream to avoid deadlocks."""
+        try:
+            for line in iter(stream.readline, ''):
+                if not line:
+                    break
+                print(f"[Gazebo {label}] {line.rstrip()}")
+        finally:
+            stream.close()
         
     def start_gazebo(self):
         """Start Gazebo simulation server"""
@@ -53,9 +65,26 @@ class GazeboWebServer:
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         universal_newlines=True,
+                        bufsize=1,
                         env=env
                     )
                     print(f"Command '{' '.join(cmd)}' started successfully")
+
+                    # Start background consumers for stdout/stderr to prevent blocking
+                    if self.gazebo_process.stdout:
+                        self.stdout_thread = threading.Thread(
+                            target=self._stream_output,
+                            args=(self.gazebo_process.stdout, 'STDOUT'),
+                            daemon=True
+                        )
+                        self.stdout_thread.start()
+                    if self.gazebo_process.stderr:
+                        self.stderr_thread = threading.Thread(
+                            target=self._stream_output,
+                            args=(self.gazebo_process.stderr, 'STDERR'),
+                            daemon=True
+                        )
+                        self.stderr_thread.start()
                     
                     # Give it a moment to start and check if it's still running
                     time.sleep(2)
