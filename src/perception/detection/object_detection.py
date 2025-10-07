@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import time
 from queue import Empty
+from sklearn.cluster import DBSCAN
 from udp_capture import frame_queue
 
 # Motion detection setup
@@ -147,73 +148,193 @@ def detect_with_farneback_optical_flow(prev_frame, current_frame, scale=0.5):
     return detected_objects
 
 def detect_with_lucas_kanade_optical_flow(prev_frame, current_frame, feature_params, lk_params, K):
-    """
-    Detects movement in a given frame using the Lucas-Kanade Optical Flow algorithm.
-    
-    The function first detects features in the previous frame, then tracks them in the current frame using the Lucas-Kanade Optical Flow algorithm. 
-    It then computes an Essential matrix with RANSAC, and uses it to recover the camera pose. 
-    The points with valid tracking are returned, as well as the computed pose and a visualization of the tracked points.
-    
-    :param prev_frame: The previous frame from the camera
-    :param current_frame: The current frame from the camera
-    :param feature_params: Parameters for feature detection
-    :param lk_params: Parameters for Lucas-Kanade Optical Flow
-    :param K: The camera intrinsic matrix
-    :return: A dictionary containing the detected object information
-    """
-    # Convert to grayscale
+    """Detect moving regions using Lucas-Kanade optical flow with motion compensation."""
+
+    def _empty_result(vis_frame=None):
+        return {
+            "R": np.eye(3),
+            "t": np.zeros((3, 1)),
+            "tracked_points": np.empty((0, 1, 2), dtype=np.float32),
+            "moving_points": np.empty((0, 2), dtype=np.float32),
+            "clusters": [],
+            "frame_vis": current_frame if vis_frame is None else vis_frame
+        }
+
     prev_gray = cv2.cvtColor(prev_frame, cv2.COLOR_BGR2GRAY)
     curr_gray = cv2.cvtColor(current_frame, cv2.COLOR_BGR2GRAY)
 
-    # Detect features if none exist
+    prev_gray = cv2.GaussianBlur(prev_gray, (5, 5), 0)
+    curr_gray = cv2.GaussianBlur(curr_gray, (5, 5), 0)
+
     prev_pts = cv2.goodFeaturesToTrack(prev_gray, mask=None, **feature_params)
+    if prev_pts is None or len(prev_pts) == 0:
+        return _empty_result()
 
-    if prev_pts is None:
-        return {
-            "R": np.eye(3),
-            "t": np.zeros((3, 1)),
-            "tracked_points": np.array([]),
-            "frame_vis": current_frame
-        }
-    
-    # Track points with Lucas-Kanade Optical Flow
     curr_pts, status, err = cv2.calcOpticalFlowPyrLK(prev_gray, curr_gray, prev_pts, None, **lk_params)
+    if curr_pts is None or status is None:
+        return _empty_result()
 
-    # Keep only valid points
-    good_prev = prev_pts[status.squeeze() == 1]
-    good_curr = curr_pts[status.squeeze() == 1]
+    status = status.reshape(-1)
+    err = err.reshape(-1)
+    valid_mask = (status == 1) & (err < 20.0)
+    if not np.any(valid_mask):
+        return _empty_result()
 
-    # Need at least 8 points to compute Essential matrix
-    if len(good_prev) < 8: 
-        return {
-            "R": np.eye(3),
-            "t": np.zeros((3, 1)),
-            "tracked_points": np.array([]),
-            "frame_vis": current_frame
-        }
-    
-    # Compute Essential matrix with RANSAC
-    E, mask = cv2.findEssentialMat(good_curr, good_prev, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
-    if E is None:
-        return {
-            "R": np.eye(3),
-            "t": np.zeros((3, 1)),
-            "tracked_points": np.array([]),
-            "frame_vis": current_frame
-        }
-    
-    _, R, t, mask_pose = cv2.recoverPose(E, good_curr, good_prev, K)
+    good_prev = prev_pts[valid_mask]
+    good_curr = curr_pts[valid_mask]
 
-    # Visualization: draw tracks
+    if len(good_prev) < 4:
+        return _empty_result()
+
+    fb_pts, fb_status, fb_err = cv2.calcOpticalFlowPyrLK(curr_gray, prev_gray, good_curr, None, **lk_params)
+    if fb_pts is not None and fb_status is not None:
+        fb_status = fb_status.reshape(-1)
+        fb_err = fb_err.reshape(-1)
+        fb_dist = np.linalg.norm(good_prev.reshape(-1, 2) - fb_pts.reshape(-1, 2), axis=1)
+        fb_mask = (fb_status == 1) & (fb_err < 20.0) & (fb_dist < 1.5)
+        if np.count_nonzero(fb_mask) >= 4:
+            good_prev = good_prev[fb_mask]
+            good_curr = good_curr[fb_mask]
+
+    if len(good_prev) < 4:
+        return _empty_result()
+
+    good_prev_xy = good_prev.reshape(-1, 2)
+    good_curr_xy = good_curr.reshape(-1, 2)
+    frame_h, frame_w = current_frame.shape[:2]
+    frame_diag = float(np.hypot(frame_w, frame_h))
+
+    affine, inliers = cv2.estimateAffinePartial2D(
+        good_prev_xy,
+        good_curr_xy,
+        method=cv2.RANSAC,
+        ransacReprojThreshold=2.5,
+        maxIters=2000,
+        confidence=0.99,
+    )
+
+    if affine is not None:
+        predicted_curr = cv2.transform(good_prev_xy.reshape(-1, 1, 2), affine).reshape(-1, 2)
+        residuals = good_curr_xy - predicted_curr
+    else:
+        residuals = good_curr_xy - good_prev_xy
+
+    residual_mags = np.linalg.norm(residuals, axis=1)
+    median_mag = np.median(residual_mags)
+    mad = np.median(np.abs(residual_mags - median_mag)) * 1.4826 + 1e-6
+    z_scores = np.abs(residual_mags - median_mag) / mad
+
+    if inliers is not None:
+        inliers = inliers.reshape(-1).astype(bool)
+    else:
+        inliers = np.ones_like(residual_mags, dtype=bool)
+
+    # Balanced thresholds: detect real motion while rejecting noise
+    # Use OR logic: either strong motion OR statistically significant outlier
+    strong_motion = residual_mags > 1.8  # Absolute displacement threshold
+    statistical_outlier = (~inliers) & (z_scores > 3.0)  # RANSAC outlier with significance
+    moving_mask = strong_motion | statistical_outlier
+    moving_indices = np.where(moving_mask)[0]
+
+    moving_prev = good_prev_xy[moving_indices] if moving_indices.size else np.empty((0, 2))
+    moving_curr = good_curr_xy[moving_indices] if moving_indices.size else np.empty((0, 2))
+    moving_residuals = residuals[moving_indices] if moving_indices.size else np.empty((0, 2))
+
+    clusters = []
+    if moving_curr.shape[0] >= 2:  # Back to 2 minimum points
+        try:
+            eps = max(12.0, 0.025 * frame_diag)  # Looser clustering for better grouping
+            clustering = DBSCAN(eps=eps, min_samples=2).fit(moving_curr)  # min_samples=2
+            labels = clustering.labels_
+            unique_labels = [lbl for lbl in np.unique(labels) if lbl != -1]
+            for lbl in unique_labels:
+                pts = moving_curr[labels == lbl]
+                mag_subset = np.linalg.norm(moving_residuals[labels == lbl], axis=1)
+                if pts.shape[0] == 0:
+                    continue
+                x, y, w, h = cv2.boundingRect(pts.astype(np.int32))
+                pad = 10
+                x = max(int(x - pad), 0)
+                y = max(int(y - pad), 0)
+                w = int(min(w + 2 * pad, current_frame.shape[1] - x))
+                h = int(min(h + 2 * pad, current_frame.shape[0] - y))
+                diag = float(np.hypot(w, h))
+                area = float(w * h)
+                density = pts.shape[0] / max(area, 1.0)
+                # Relaxed filters: allow smaller, sparser clusters
+                if (diag > 0.5 * frame_diag and pts.shape[0] < 4):  # Only reject huge sparse boxes
+                    continue
+                # Lower motion requirement
+                avg_motion = mag_subset.mean()
+                if avg_motion < 1.5:  # Lower threshold for motion
+                    continue
+                confidence = float(np.clip(avg_motion / 4.0, 0.2, 1.0))
+                clusters.append({
+                    "bbox": (x, y, w, h),
+                    "score": confidence,
+                    "count": int(pts.shape[0]),
+                    "density": density
+                })
+        except Exception:
+            pass
+
+    if not clusters and moving_curr.shape[0] > 0:
+        # Relaxed fallback: create detection for any sustained moving points
+        avg_residual_mag = np.mean(np.linalg.norm(moving_residuals, axis=1))
+        if avg_residual_mag < 1.5:  # Lower threshold
+            return {
+                "R": R,
+                "t": t,
+                "tracked_points": good_curr.reshape(-1, 1, 2),
+                "moving_points": moving_curr,
+                "clusters": [],
+                "frame_vis": vis
+            }
+        
+        center = moving_curr.mean(axis=0)
+        spread = moving_curr.std(axis=0) * 2.5
+        spread = np.maximum(spread, np.array([15.0, 15.0]))  # Slightly larger minimum
+        x = int(np.clip(center[0] - spread[0], 0, frame_w - 1))
+        y = int(np.clip(center[1] - spread[1], 0, frame_h - 1))
+        w = int(np.clip(spread[0] * 2, 30, frame_w - x))  # Minimum 30px wide
+        h = int(np.clip(spread[1] * 2, 30, frame_h - y))  # Minimum 30px tall
+        diag = float(np.hypot(w, h))
+        if diag <= 0.65 * frame_diag:  # Allow slightly larger boxes
+            avg_mag = float(np.clip(avg_residual_mag / 4.0, 0.2, 1.0))
+            clusters.append({
+                "bbox": (x, y, w, h),
+                "score": avg_mag,
+                "count": int(moving_curr.shape[0]),
+                "density": moving_curr.shape[0] / max(w * h, 1.0)
+            })
+
+    R = np.eye(3)
+    t = np.zeros((3, 1))
+    if good_curr_xy.shape[0] >= 8:
+        E, mask_pose = cv2.findEssentialMat(good_curr_xy, good_prev_xy, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
+        if E is not None:
+            _, R, t, _ = cv2.recoverPose(E, good_curr_xy, good_prev_xy, K)
+
     vis = current_frame.copy()
-    for pt in good_curr:
-        x, y = pt.ravel()  # Flatten the point array to get x, y
-        cv2.circle(vis, (int(x), int(y)), 3, (0, 255, 0), -1)
+    for (p_prev, p_curr, is_moving) in zip(good_prev_xy, good_curr_xy, moving_mask):
+        x1, y1 = map(int, p_prev)
+        x2, y2 = map(int, p_curr)
+        color = (0, 0, 255) if is_moving else (0, 200, 0)
+        cv2.line(vis, (x1, y1), (x2, y2), (80, 80, 80), 1, cv2.LINE_AA)
+        cv2.circle(vis, (x2, y2), 3, color, -1)
+
+    for cluster in clusters:
+        x, y, w, h = cluster["bbox"]
+        label = f"Move {cluster['count']}" if cluster.get("count", 0) else "Motion"
+        cv2.rectangle(vis, (x, y), (x + w, y + h), (0, 165, 255), 2)
+        cv2.putText(vis, label, (x, y - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 165, 255), 1)
 
     return {
         "R": R,
         "t": t,
-        "tracked_points": good_curr,
+        "tracked_points": good_curr.reshape(-1, 1, 2),
+        "moving_points": moving_curr,
+        "clusters": clusters,
         "frame_vis": vis
     }
 
@@ -459,22 +580,22 @@ def main():
                               [0, 0, 1]], dtype=np.float32)
     
     try:
-        calib_data = np.load("src/perception/calibration/camera_calib.npz")
+        calib_data = np.load("camera_calib.npz")
         camera_matrix = calib_data["camera_matrix"]
         print("Loaded camera calibration matrix")
     except Exception as e:
         print(f"Warning: Could not load camera calibration: {e}")
         print("Using default camera matrix for optical flow")
     
-    # Parameters for Lucas-Kanade optical flow
-    feature_params = dict(maxCorners=100,
-                         qualityLevel=0.3,
-                         minDistance=7,
+    # Parameters for Lucas-Kanade optical flow - optimized for motion detection
+    feature_params = dict(maxCorners=150,        # More features for better coverage
+                         qualityLevel=0.01,      # Lower quality = more corners (more sensitive)
+                         minDistance=10,         # Spread features out more
                          blockSize=7)
     
-    lk_params = dict(winSize=(15, 15),
-                    maxLevel=2,
-                    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+    lk_params = dict(winSize=(21, 21),           # Larger window = more robust tracking
+                    maxLevel=3,                  # More pyramid levels = handle larger motion
+                    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 15, 0.02))
 
     print("Starting UDP OpenCV object detection...")
     print("Controls:")
@@ -546,23 +667,32 @@ def main():
                 flow_result = detect_with_lucas_kanade_optical_flow(
                     prev_frame, frame, feature_params, lk_params, camera_matrix
                 )
-                # Convert optical flow result to detected objects format
-                if isinstance(flow_result, dict) and 'tracked_points' in flow_result:
-                    detected_objects = []
-                    for pt in flow_result['tracked_points']:
-                        x, y = pt.ravel()  # Flatten the point array
-                        x, y = int(x), int(y)
+                detected_objects = []
+                if isinstance(flow_result, dict):
+                    clusters = flow_result.get('clusters', [])
+                    for cluster in clusters:
+                        x, y, w, h = cluster['bbox']
+                        confidence = cluster.get('score', 0.5)
                         detected_objects.append({
-                            'label': 'tracked_point',
-                            'confidence': 1.0,
-                            'bbox': (x-5, y-5, 10, 10),
-                            'center': (x, y)
+                            'label': 'moving_object',
+                            'confidence': confidence,
+                            'bbox': (x, y, w, h),
+                            'center': (x + w//2, y + h//2),
+                            'count': cluster.get('count', 0)
                         })
-                    # Use the visualization frame if available
-                    if 'frame_vis' in flow_result:
-                        frame = flow_result['frame_vis']
-                else:
-                    detected_objects = []
+
+                    if not detected_objects:
+                        moving_pts = flow_result.get('moving_points', np.empty((0, 2)))
+                        for pt in moving_pts:
+                            x, y = map(int, pt)
+                            detected_objects.append({
+                                'label': 'moving_point',
+                                'confidence': 0.4,
+                                'bbox': (x - 6, y - 6, 12, 12),
+                                'center': (x, y)
+                            })
+
+                    frame = flow_result.get('frame_vis', frame)
                 mode_name = "Optical Flow"
             else:
                 detected_objects = []
