@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 from queue import Empty
-from src.perception.streams.udp_capture import frame_queue
+from udp_capture import frame_queue
 
 # Motion detection setup
 bg_subtractor = cv2.createBackgroundSubtractorMOG2()
@@ -150,7 +150,9 @@ def detect_with_lucas_kanade_optical_flow(prev_frame, current_frame, feature_par
     """
     Detects movement in a given frame using the Lucas-Kanade Optical Flow algorithm.
     
-    The function first detects features in the previous frame, then tracks them in the current frame using the Lucas-Kanade Optical Flow algorithm. It then computes an Essential matrix with RANSAC, and uses it to recover the camera pose. The points with valid tracking are returned, as well as the computed pose and a visualization of the tracked points.
+    The function first detects features in the previous frame, then tracks them in the current frame using the Lucas-Kanade Optical Flow algorithm. 
+    It then computes an Essential matrix with RANSAC, and uses it to recover the camera pose. 
+    The points with valid tracking are returned, as well as the computed pose and a visualization of the tracked points.
     
     :param prev_frame: The previous frame from the camera
     :param current_frame: The current frame from the camera
@@ -204,7 +206,8 @@ def detect_with_lucas_kanade_optical_flow(prev_frame, current_frame, feature_par
 
     # Visualization: draw tracks
     vis = current_frame.copy()
-    for (x, y) in good_curr:
+    for pt in good_curr:
+        x, y = pt.ravel()  # Flatten the point array to get x, y
         cv2.circle(vis, (int(x), int(y)), 3, (0, 255, 0), -1)
 
     return {
@@ -449,6 +452,30 @@ def main():
     global bg_subtractor, prev_frame
     bg_subtractor = cv2.createBackgroundSubtractorMOG2(history=200, varThreshold=16, detectShadows=True)
 
+    # Load camera calibration for optical flow
+    # Default camera matrix (rough estimate for typical camera)
+    camera_matrix = np.array([[800, 0, 320],
+                              [0, 800, 240],
+                              [0, 0, 1]], dtype=np.float32)
+    
+    try:
+        calib_data = np.load("src/perception/calibration/camera_calib.npz")
+        camera_matrix = calib_data["camera_matrix"]
+        print("Loaded camera calibration matrix")
+    except Exception as e:
+        print(f"Warning: Could not load camera calibration: {e}")
+        print("Using default camera matrix for optical flow")
+    
+    # Parameters for Lucas-Kanade optical flow
+    feature_params = dict(maxCorners=100,
+                         qualityLevel=0.3,
+                         minDistance=7,
+                         blockSize=7)
+    
+    lk_params = dict(winSize=(15, 15),
+                    maxLevel=2,
+                    criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03))
+
     print("Starting UDP OpenCV object detection...")
     print("Controls:")
     print("   'q' - Quit")
@@ -516,7 +543,26 @@ def main():
             mode_name = "Edge Detection"
         elif detection_mode == 5:
             if prev_frame is not None:
-                detected_objects = detect_with_lucas_kanade_optical_flow(prev_frame, frame)
+                flow_result = detect_with_lucas_kanade_optical_flow(
+                    prev_frame, frame, feature_params, lk_params, camera_matrix
+                )
+                # Convert optical flow result to detected objects format
+                if isinstance(flow_result, dict) and 'tracked_points' in flow_result:
+                    detected_objects = []
+                    for pt in flow_result['tracked_points']:
+                        x, y = pt.ravel()  # Flatten the point array
+                        x, y = int(x), int(y)
+                        detected_objects.append({
+                            'label': 'tracked_point',
+                            'confidence': 1.0,
+                            'bbox': (x-5, y-5, 10, 10),
+                            'center': (x, y)
+                        })
+                    # Use the visualization frame if available
+                    if 'frame_vis' in flow_result:
+                        frame = flow_result['frame_vis']
+                else:
+                    detected_objects = []
                 mode_name = "Optical Flow"
             else:
                 detected_objects = []
