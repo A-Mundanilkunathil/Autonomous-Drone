@@ -1,13 +1,19 @@
 import time
 from session import MavSession
 from vehicle_auto import VehicleAuto
+import logging
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"             
+    )
     sess = MavSession(port="/dev/tty.usbserial-0001", baud=57600).connect()
     auto = VehicleAuto(sess)
 
     # Hearbeat & Arm 
     sess.start_heartbeat()
+    sess.start_pump()
 
     try:
         auto.guided_takeoff(3.0) # Takeoff to 3m
@@ -31,6 +37,7 @@ def main():
             auto.disarm(wait=True)
         except Exception as e:
             print(f"Failed to disarm: {e}")
+        sess.stop_pump()
         sess.stop_heartbeat()
         sess.close()
         
