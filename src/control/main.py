@@ -15,10 +15,9 @@ def main():
         # Hover for 2 seconds
         time.sleep(2.0)
         
-        # Small forward then stop and hold
-        auto.move_backward(speed=0.5, duration=2.0, rate_hz=10)
-        auto.stop(duration=0.3, rate_hz=10)
-        auto.hold_position()
+        # Move forward then stop
+        auto.move_forward(speed=0.5, duration=2.0, rate_hz=10)
+        auto.stop(duration=0.3, rate_hz=10)  
         
         # Land then disarm
         auto.land()

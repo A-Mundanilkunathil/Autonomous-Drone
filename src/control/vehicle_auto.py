@@ -60,7 +60,7 @@ class VehicleAuto(VehicleMotion):
         self.conn.mav.command_long_send(
             self.conn.target_system, self.conn.target_component,
             mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0,
-            0,0,0,0,0,0,0, target_alt
+            0, 0, 0, 0, 0, 0, target_alt  
         )
         self.wait_command_ack(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 3.0)
         if not wait:
