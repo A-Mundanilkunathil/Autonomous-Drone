@@ -16,6 +16,16 @@ class VehicleBase:
         return self.sess.recv(msg_type, timeout=timeout)
 
     def wait_mode(self, name: str, timeout: float = 3.0) -> bool:
+        """
+        Wait for the FC to enter a given mode.
+
+        Blocks until either the FC is in the given mode, or a timeout is reached.
+
+        :param name: The name of the mode to wait for.
+        :param timeout: The maximum time to wait for the mode change in seconds.
+        :return: True if the mode change was successful, False otherwise.
+        :raises RuntimeError: If the mode change times out.
+        """
         mapping = self.conn.mode_mapping()
         want = mapping[name]
         end = time.time() + timeout
@@ -37,6 +47,17 @@ class VehicleBase:
         self.wait_mode(name, timeout=3.0)
 
     def wait_command_ack(self, cmd: int, timeout: float = 3.0) -> None:
+        """
+        Wait for a COMMAND_ACK message from the FC for a given command.
+
+        Blocks until either a COMMAND_ACK message is received with a matching command
+        and a result indicating success (MAV_RESULT_ACCEPTED or MAV_RESULT_IN_PROGRESS), or
+        a timeout is reached.
+
+        :param cmd: The MAVLink command ID to wait for.
+        :param timeout: The maximum time to wait for the command ack in seconds.
+        :raises RuntimeError: If the command ack is not received within the given timeout.
+        """
         end = time.time() + timeout
         while time.time() < end:
             ack = self.recv_msg('COMMAND_ACK', timeout=0.3)

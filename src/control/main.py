@@ -20,6 +20,7 @@ def main():
         auto.stop(duration=0.3, rate_hz=10)  
         
         # Land then disarm
+        auto.hold_position()
         auto.land()
         auto.disarm()
 

@@ -7,15 +7,23 @@ log = logging.getLogger("VehicleAuto")
 class VehicleAuto(VehicleMotion):
     """High-level behaviors composed from motion + base primitives."""
 
-    # Helpers
+    # ------------------- Helpers -------------------
     def _meters_between(self, lat1, lon1, lat2, lon2) -> float:
-        # Equirectangular approximation
+        """
+        Calculate the distance in meters between two lat/lon points using the Equirectangular approximation.
+
+        :param lat1: Latitude of the first point in degrees
+        :param lon1: Longitude of the first point in degrees
+        :param lat2: Latitude of the second point in degrees
+        :param lon2: Longitude of the second point in degrees
+        :return: Distance between the two points in meters
+        """
         R = 6378137.0 # Earth radius in meters
         x = math.radians(lon2 - lon1) * math.cos(math.radians((lat1 + lat2) / 2))
         y = math.radians(lat2 - lat1)
         return math.sqrt(x*x + y*y) * R
 
-    # Actions
+    # ------------------- Actions -------------------
     def goto_latlon(self,
                     lat_deg: float,
                     lon_deg: float,
@@ -25,7 +33,19 @@ class VehicleAuto(VehicleMotion):
                     rate_hz: float = 10.0,
                     timeout: float = 90.0) -> None:
         """
-        Fly to a global (lat,lon,alt_rel) in GUIDED by streaming GLOBAL_RELATIVE_ALT_INT position targets.
+        Go to a target position and altitude in GUIDED mode.
+
+        Will timeout if the vehicle does not reach the target position
+        within the given time limit.
+
+        :param lat_deg: target latitude in degrees
+        :param lon_deg: target longitude in degrees
+        :param alt_rel_m: target altitude relative to home in meters
+        :param pos_tol_m: position tolerance in meters
+        :param alt_tol_m: altitude tolerance in meters
+        :param rate_hz: rate at which to send position setpoints
+        :param timeout: time limit in seconds
+        :return: None
         """
         # Guided mode
         self.set_mode("GUIDED")
@@ -43,6 +63,7 @@ class VehicleAuto(VehicleMotion):
                 cur_lon = gpi.lon / 1e7
                 cur_alt = gpi.relative_alt / 1000.0 # mm -> m
 
+                # Check if we've reached the target
                 dist_xy = self._meters_between(cur_lat, cur_lon, lat_deg, lon_deg)
                 alt_err = abs(cur_alt - alt_rel_m)
 
@@ -55,6 +76,18 @@ class VehicleAuto(VehicleMotion):
         raise RuntimeError("goto_latlon timeout")
 
     def guided_takeoff(self, target_alt: float, wait: bool=True, timeout: float=30.0) -> None:
+        """
+        Takeoff in GUIDED mode.
+
+        Will arm the vehicle, send a takeoff command and wait for the vehicle to reach the target altitude.
+
+        Will timeout if the vehicle does not reach the target altitude within the given time limit.
+
+        :param target_alt: target altitude in meters
+        :param wait: whether to wait for the vehicle to reach the target altitude
+        :param timeout: time limit in seconds
+        :return: None
+        """
         self.set_mode("GUIDED")
         self.arm()
         self.conn.mav.command_long_send(
@@ -73,20 +106,39 @@ class VehicleAuto(VehicleMotion):
                 return
         raise RuntimeError("Takeoff timeout")
 
-    def land(self, wait: bool=True, timeout: float=45.0) -> None:
-        self.conn.mav.command_long_send(
-            self.conn.target_system, self.conn.target_component,
-            mavutil.mavlink.MAV_CMD_NAV_LAND, 0, 0,0,0,0,0,0,0,0
-        )
-        self.wait_command_ack(mavutil.mavlink.MAV_CMD_NAV_LAND, 3.0)
+    def land(self, wait: bool=True, timeout: float=60.0) -> None:
+        """
+        Land in LAND mode.
+
+        Will send a land command and wait for the vehicle to land.
+
+        Will timeout if the vehicle does not land within the given time limit.
+
+        :param wait: whether to wait for the vehicle to land
+        :param timeout: time limit in seconds
+        :return: None
+        """
+        self.set_mode("LAND")
         if not wait:
             return
         end = time.time() + timeout
         while time.time() < end:
-            gpi = self.recv_msg('GLOBAL_POSITION_INT', timeout=0.3)
-            if gpi and gpi.relative_alt <= 500:  # 0.5 m
-                log.info("Landing complete")
+            # Check landed state if available
+            ess = self.recv_msg('EXTENDED_SYS_STATE', timeout=0.3)
+            if ess and getattr(ess, 'landed_state', None) == mavutil.mavlink.MAV_LANDED_STATE_ON_GROUND:
+                log.info("Landing complete (landed state)")
                 return
+            
+            # Fallback to GLOBAL_POSITION_INT altitude + vertical speed
+            gpi = self.recv_msg('GLOBAL_POSITION_INT', timeout=0.3)
+            if gpi:
+                rel_alt_m = gpi.relative_alt / 1000.0 # mm -> m
+                vz_mps = gpi.vz / 100.0 # cm/s -> m/s
+
+                # If altitude < 0.5m and vertical speed < 0.2m/s
+                if rel_alt_m <= 0.5 and abs(vz_mps) < 0.2:
+                    log.info("Landing complete (alt + speed)")
+                    return
         raise RuntimeError("Landing timeout")
 
     def return_to_home(self) -> None:

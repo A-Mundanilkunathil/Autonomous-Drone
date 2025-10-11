@@ -13,10 +13,11 @@ class MavSession:
         self.baud = baud
         self.heartbeat_period = 1 / heartbeat_hz # Heartbeat interval in seconds
         self._m: Optional[mavutil.mavfile] = None # MAVLink connection
+
+        # Heartbeat control
         self._last_hb = 0.0 # Last heartbeat time
         self._hb_thread: Optional[threading.Thread] = None
         self._stop_hb_event = threading.Event()
-        
     def connect(self):
         logger.info(f"Connecting {self.port}@{self.baud}...")
         self._m = mavutil.mavlink_connection(self.port, baud=self.baud)
@@ -45,6 +46,14 @@ class MavSession:
             logger.debug(f"Received message: {message}")
 
     def send_heartbeat(self):  
+        """
+        Send a heartbeat message to the MAVLink connection.
+
+        This function will send a heartbeat message if the time since the last heartbeat
+        is greater than or equal to the heartbeat period.
+
+        :return: None
+        """
         now = time.time()
         if now - self._last_hb >= self.heartbeat_period:
             self.conn.mav.heartbeat_send(
@@ -62,6 +71,14 @@ class MavSession:
             logger.info("MAVLink connection closed")
 
     def recv(self, msg_type=None, blocking=True, timeout=1.0):
+        """
+        Receive a MAVLink message.
+
+        :param msg_type: The type of MAVLink message to receive.
+        :param blocking: If True, the function will block until a message is received.
+        :param timeout: If blocking is True, the function will timeout after this many seconds.
+        :return: The received MAVLink message, or None if no message was received.
+        """
         return self._m.recv_match(type=msg_type, blocking=blocking, timeout=timeout)
 
     def start_heartbeat(self):
