@@ -6,6 +6,7 @@ import subprocess
 import threading
 import time
 import os
+import textwrap
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 class GazeboWebServer:
@@ -26,9 +27,8 @@ class GazeboWebServer:
             stream.close()
         
     def start_gazebo(self):
-        """Start Gazebo simulation server"""
+        """Start Gazebo simulation server."""
         try:
-            # Try different Gazebo commands with GUI support
             commands = [
                 ["gz", "sim", "-v", "4", "--gui-config", "/tmp/gui.config"],  # Try with GUI config
                 ["gz", "sim", "-v", "4", "-g"],  # Force GUI mode
@@ -36,30 +36,41 @@ class GazeboWebServer:
                 ["ign", "gazebo", "-v", "4", "-g"],  # Ignition with GUI
                 ["gazebo", "--verbose"],  # Classic Gazebo
             ]
-            
-            # Create a simple GUI config to ensure window shows
-            gui_config = """<?xml version="1.0"?>
-<gui version="1.0">
-  <window>
-    <width>1200</width>
-    <height>800</height>
-  </window>
-</gui>"""
+
+            gui_config = textwrap.dedent(
+                """
+                <?xml version="1.0"?>
+                <gui version="1.0">
+                  <window>
+                    <width>1280</width>
+                    <height>720</height>
+                  </window>
+                  <plugin filename="MinimalScene" name="3D View">
+                    <engine>ogre2</engine>
+                    <scene>scene</scene>
+                    <ambient_light>0.4 0.4 0.4</ambient_light>
+                    <background_color>0.7 0.7 0.7</background_color>
+                  </plugin>
+                  <plugin filename="WorldControl" name="World control"/>
+                  <plugin filename="WorldStats" name="World stats"/>
+                </gui>
+                """
+            )
             with open('/tmp/gui.config', 'w') as f:
                 f.write(gui_config)
-            
+
             for cmd in commands:
                 try:
                     print(f"Trying command: {' '.join(cmd)}")
-                    # Ensure GUI environment is set up
                     env = dict(os.environ)
                     env.update({
                         'DISPLAY': ':99',
                         'QT_X11_NO_MITSHM': '1',
                         'GAZEBO_MODEL_PATH': '/usr/share/gazebo-11/models:/usr/share/ignition/fuel',
-                        'GZ_SIM_RESOURCE_PATH': '/usr/share/ignition/fuel'
+                        'GZ_SIM_RESOURCE_PATH': '/usr/share/ignition/fuel',
+                        'GZ_GUI_CONFIG': '/root/.gz/sim/7/gui.config'
                     })
-                    
+
                     self.gazebo_process = subprocess.Popen(
                         cmd,
                         stdout=subprocess.PIPE,
@@ -70,7 +81,6 @@ class GazeboWebServer:
                     )
                     print(f"Command '{' '.join(cmd)}' started successfully")
 
-                    # Start background consumers for stdout/stderr to prevent blocking
                     if self.gazebo_process.stdout:
                         self.stdout_thread = threading.Thread(
                             target=self._stream_output,
@@ -85,22 +95,17 @@ class GazeboWebServer:
                             daemon=True
                         )
                         self.stderr_thread.start()
-                    
-                    # Give it a moment to start and check if it's still running
+
                     time.sleep(2)
                     if self.gazebo_process.poll() is None:
                         return True
-                    else:
-                        print(f"Process exited quickly, trying next command...")
-                        continue
-                        
+
+                    print("Process exited quickly, trying next command...")
                 except FileNotFoundError:
                     print(f"Command '{cmd[0]}' not found, trying next...")
-                    continue
                 except Exception as e:
                     print(f"Error with command '{' '.join(cmd)}': {e}")
-                    continue
-            
+
             return False
         except Exception as e:
             print(f"Failed to start Gazebo: {e}")

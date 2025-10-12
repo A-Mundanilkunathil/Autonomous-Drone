@@ -37,6 +37,33 @@ export GAZEBO_MASTER_URI=http://localhost:11345
 export OGRE_RTShader_Write=0
 export OGRE_SKIP_RenderSystem_GL3Plus=1
 
+# Install a minimal Gazebo GUI configuration to avoid loading heavy plugins
+MINIMAL_GUI_CONFIG='<?xml version="1.0"?>
+<gui version="1.0">
+    <window>
+        <width>1280</width>
+        <height>720</height>
+    </window>
+    <plugin filename="MinimalScene" name="3D View">
+        <engine>ogre2</engine>
+        <scene>scene</scene>
+        <ambient_light>0.4 0.4 0.4</ambient_light>
+        <background_color>0.7 0.7 0.7</background_color>
+    </plugin>
+    <plugin filename="WorldControl" name="World control"/>
+    <plugin filename="WorldStats" name="World stats"/>
+</gui>'
+
+# Overwrite the system default so Gazebo cannot restore the heavy layout
+if [ -d /usr/share/gz/gz-sim7/gui ]; then
+    echo "$MINIMAL_GUI_CONFIG" > /usr/share/gz/gz-sim7/gui/gui.config
+fi
+
+# Ensure the user config matches the minimal layout every startup
+mkdir -p /root/.gz/sim/7
+echo "$MINIMAL_GUI_CONFIG" > /root/.gz/sim/7/gui.config
+export GZ_GUI_CONFIG=/root/.gz/sim/7/gui.config
+
 # Wait for X server to start
 echo "Waiting for X server to initialize..."
 sleep 3
@@ -81,7 +108,8 @@ session.screen0.maxDisableResize: false
 session.screen0.workspaces: 1
 EOF
 
-fluxbox &
+# Start fluxbox in background and suppress config warnings
+fluxbox 2>/dev/null &
 sleep 2
 
 # Start VNC server with authentication
