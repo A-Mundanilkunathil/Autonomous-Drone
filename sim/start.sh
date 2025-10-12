@@ -10,16 +10,32 @@ pkill -f websockify || true
 
 # Start virtual display with proper settings for Gazebo
 echo "Starting Xvfb..."
-Xvfb :99 -screen 0 1280x720x24 -ac +extension GLX +render +extension RANDR +extension COMPOSITE -noreset -dpi 100 -fp /usr/share/fonts/X11/misc/ &
+# Increased resolution for better viewing and centering
+Xvfb :99 -screen 0 1920x1080x24 -ac +extension GLX +render +extension RANDR +extension COMPOSITE -noreset -dpi 96 -fp /usr/share/fonts/X11/misc/ &
 export DISPLAY=:99
+export XDG_RUNTIME_DIR=/tmp/runtime-root
+mkdir -p $XDG_RUNTIME_DIR && chmod 700 $XDG_RUNTIME_DIR
 export XAUTHORITY=/tmp/.X99-auth
 
 # Set environment variables for better OpenGL support
 export LIBGL_ALWAYS_SOFTWARE=1
 export LIBGL_ALWAYS_INDIRECT=0
-export MESA_GL_VERSION_OVERRIDE=3.0
+export MESA_GL_VERSION_OVERRIDE=3.3
 export GALLIUM_DRIVER=llvmpipe
 export QT_X11_NO_MITSHM=1
+export GZ_IP=127.0.0.1
+export IGN_IP=127.0.0.1
+
+# Force software rendering and disable GPU features
+export MESA_LOADER_DRIVER_OVERRIDE=llvmpipe
+export __GLX_VENDOR_LIBRARY_NAME=mesa
+export VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/lvp_icd.x86_64.json
+export LIBGL_DEBUG=verbose
+
+# Force Gazebo to use software rendering
+export GAZEBO_MASTER_URI=http://localhost:11345
+export OGRE_RTShader_Write=0
+export OGRE_SKIP_RenderSystem_GL3Plus=1
 
 # Wait for X server to start
 echo "Waiting for X server to initialize..."
@@ -36,6 +52,35 @@ fi
 
 # Start window manager
 echo "Starting window manager (fluxbox)..."
+
+# Create fluxbox config directory
+mkdir -p /root/.fluxbox
+
+# Configure fluxbox for centered windows
+cat > /root/.fluxbox/apps << 'EOF'
+[app] (name=Gazebo) (class=gazebo)
+  [Position] (CENTER) {0 0}
+  [Maximized] {yes}
+[end]
+
+[app] (name=gz)
+  [Position] (CENTER) {0 0}
+  [Maximized] {yes}
+[end]
+EOF
+
+# Configure fluxbox init settings for better window management
+cat > /root/.fluxbox/init << 'EOF'
+session.screen0.windowPlacement: RowSmartPlacement
+session.screen0.defaultDeco: NORMAL
+session.screen0.focusModel: ClickFocus
+session.screen0.fullMaximization: true
+session.screen0.maxIgnoreIncrement: true
+session.screen0.maxDisableMove: false
+session.screen0.maxDisableResize: false
+session.screen0.workspaces: 1
+EOF
+
 fluxbox &
 sleep 2
 

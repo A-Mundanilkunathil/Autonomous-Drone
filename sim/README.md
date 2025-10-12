@@ -5,7 +5,7 @@ docker build --platform linux/arm64 -t gazebo-web-arm64 .
 
 # Run docker
 ```
-docker run --rm -it \
+docker run --shm-size=1g --memory=6g --memory-swap=8g --rm -it \
   -p 8080:8080 \
   -p 7681:7681 \
   -p 6080:6080 \

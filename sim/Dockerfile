@@ -1,4 +1,4 @@
-FROM --platform=linux/arm64 ubuntu:22.04
+FROM ubuntu:22.04
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -13,8 +13,8 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     python3 \
     python3-pip \
-    mesa-utils \
-    xvfb \
+    libgl1-mesa-dri \
+    mesa-vulkan-drivers \
     && rm -rf /var/lib/apt/lists/*
 
 # Add Gazebo repository
@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install web server dependencies
-RUN pip3 install websockets==11.0.3 asyncio
+RUN pip3 install websockets==11.0.3
 
 # Install VNC server and GUI components
 RUN apt-get update && apt-get install -y \
@@ -49,6 +49,12 @@ RUN apt-get update && apt-get install -y \
     libegl1-mesa \
     libgl1-mesa-glx \
     libglu1-mesa \
+    libglvnd0 \
+    libglx0 \
+    libglapi-mesa \
+    libosmesa6 \
+    libllvm15 \
+    llvm-15 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create VNC password file
@@ -70,7 +76,8 @@ EXPOSE 8080 7681 11345 6080 5900
 
 # Set environment variables
 ENV GZ_PARTITION=gz_web
-ENV GZ_IP=0.0.0.0
+ENV GZ_IP=127.0.0.1
+ENV IGN_IP=127.0.0.1
 
 # Start command
 CMD ["/gazebo/start.sh"]
