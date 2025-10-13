@@ -41,7 +41,6 @@ def main():
         # Land then disarm
         auto.hold_position()
         auto.land()
-        time.sleep(2.0) # Wait for land to complete
 
     except KeyboardInterrupt:
         print("Stopping drone control...")

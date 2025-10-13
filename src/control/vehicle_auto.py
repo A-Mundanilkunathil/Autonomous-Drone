@@ -127,6 +127,7 @@ class VehicleAuto(VehicleMotion):
             ess = self.recv_msg('EXTENDED_SYS_STATE', timeout=0.3)
             if ess and getattr(ess, 'landed_state', None) == mavutil.mavlink.MAV_LANDED_STATE_ON_GROUND:
                 log.info("Landing complete (landed state)")
+                time.sleep(2.0) # Wait for land to complete
                 return
             
             # Fallback to GLOBAL_POSITION_INT altitude + vertical speed
@@ -138,6 +139,7 @@ class VehicleAuto(VehicleMotion):
                 # If altitude < 0.5m and vertical speed < 0.2m/s
                 if rel_alt_m <= 0.5 and abs(vz_mps) < 0.2:
                     log.info("Landing complete (alt + speed)")
+                    time.sleep(2.0) # Wait for land to complete
                     return
         raise RuntimeError("Landing timeout")
 
