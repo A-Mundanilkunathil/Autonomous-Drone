@@ -1,15 +1,56 @@
-# Build docker image
+# Setup Simulator
+
+**Webots**
 ```
-docker build --platform linux/arm64 -t gazebo-web-arm64 .
+brew install --cask webots
 ```
 
-# Run docker
+**ArduPilot**
 ```
-docker run --shm-size=2g --memory=8g --memory-swap=12g --rm -it \
-  -p 8080:8080 \
-  -p 7681:7681 \
-  -p 6080:6080 \
-  -p 5900:5900 \
-  --platform linux/arm64 \
-  gazebo-web-arm64
+cd sim && git clone https://github.com/ArduPilot/ardupilot.git
+
+cd ardupilot && git submodule update --init --recursive
 ```
+
+**SITL**
+```
+./waf configure --board sitl
+./waf copter
+```
+
+**PROTO (optional)**
+```
+cd /Users/hp/Desktop/Projects/Autonomous-Drone/sim/ardupilot/libraries/SITL/examples/Webots_Python/worlds
+
+for f in *.wbt; do
+  sed -i '' 's#https://raw.githubusercontent.com/cyberbotics/webots/.*/projects/#webots://projects/#g' "$f"
+done
+```
+-  Revert if needed
+```
+cd /Users/hp/Desktop/Projects/Autonomous-Drone/sim/ardupilot/libraries/SITL/examples/Webots_Python/worlds
+
+# Restore original URLs
+for f in *.wbt; do
+  sed -i '' 's#webots://projects/#https://raw.githubusercontent.com/cyberbotics/webots/R2023a/projects/#g' "$f"
+done
+```
+
+**Controller**
+```
+/Users/hp/Desktop/Projects/Autonomous-Drone/sim/ardupilot/libraries/SITL/examples/Webots_Python/controllers/ardupilot_vehicle_controller/ardupilot_vehicle_controller.py
+```
+-  Replace ```#!/usr/bin/env python3``` with correct python env ```#!/Users/hp/Desktop/Projects/Autonomous-Drone/venv/bin/python3```
+
+**Run**
+```
+Tools/autotest/sim_vehicle.py -v ArduCopter -w \
+  --model webots-python \
+  --add-param-file=/Users/hp/Desktop/Projects/Autonomous-Drone/sim/ardupilot/libraries/SITL/examples/Webots_Python/params/iris.parm
+```
+
+**MAVProxy (optional)**
+```
+mavproxy.py --master=tcp:127.0.0.1:5760 --out 127.0.0.1:14550
+```
+
