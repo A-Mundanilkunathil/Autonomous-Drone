@@ -31,10 +31,12 @@ class VehicleMotion(VehicleBase):
         :param yaw_rate_deg_s: desired yaw rate in deg/s
         :return: None
         """
+        if self.get_mode() != 'GUIDED':
+            self.set_mode('GUIDED')
         # clamps to avoid invalid values
-        vx = max(-MAX_VXY, min(MAX_VXY, vx))
-        vy = max(-MAX_VXY, min(MAX_VXY, vy))
-        vz = max(-MAX_VZ,  min(MAX_VZ,  vz))
+        vx = max(-MAX_VXY, min(MAX_VXY, vx)) # vx <= 3 m/s
+        vy = max(-MAX_VXY, min(MAX_VXY, vy)) # vy <= 3 m/s
+        vz = max(-MAX_VZ,  min(MAX_VZ,  vz)) # vz <= 2 m/s
         use_yaw_rate = abs(yaw_rate_deg_s) >= 1e-3
         type_mask = self._type_mask_velocity_only(use_yaw_rate)
 
@@ -167,6 +169,3 @@ class VehicleMotion(VehicleBase):
 
     def hold_position(self) -> None:
         self.set_mode("LOITER")
-        for _ in range(5): 
-            self.send_velocity_body(0.0, 0.0, 0.0, 0.0)
-            time.sleep(0.1)

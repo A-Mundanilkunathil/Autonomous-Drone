@@ -46,6 +46,10 @@ class VehicleBase:
         )
         self.wait_mode(name, timeout=3.0)
 
+    def get_mode(self) -> str:
+        hb = self.recv_msg('HEARTBEAT', timeout=0.3)
+        return hb.custom_mode if hb else None
+    
     def wait_command_ack(self, cmd: int, timeout: float = 3.0) -> None:
         """
         Wait for a COMMAND_ACK message from the FC for a given command.

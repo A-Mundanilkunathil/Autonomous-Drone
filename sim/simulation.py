@@ -25,12 +25,23 @@ def main():
         time.sleep(2.0)
         
         # Move forward then stop
-        auto.move_forward(speed=0.5, duration=2.0, rate_hz=10)
+        auto.move_backward(speed=0.5, duration=2.0, rate_hz=10)
         auto.stop(duration=0.3, rate_hz=10)  
         
+        # Move backward then stop
+        auto.move_forward(speed=0.5, duration=2.0, rate_hz=10)
+        auto.stop(duration=0.3, rate_hz=10)
+
+        # Move circle
+        auto.move_circle_global(radius=2.0, speed=1.0, duration=10, update_interval=0.1)
+
+        # Move square
+        auto.move_square(speed=1.0, leg_s=3.0, rate_hz=10)
+
         # Land then disarm
         auto.hold_position()
         auto.land()
+        time.sleep(2.0) # Wait for land to complete
 
     except KeyboardInterrupt:
         print("Stopping drone control...")

@@ -170,6 +170,8 @@ class VehicleAuto(VehicleMotion):
         self._stream_velocity_body(-speed,-speed,0.0, 0.0, duration, rate_hz)
 
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):
+        if self.get_mode() != 'GUIDED':
+            self.set_mode('GUIDED')
         self.move_forward(speed, leg_s, rate_hz)
         self.move_right(speed,   leg_s, rate_hz)
         self.move_backward(speed,leg_s, rate_hz)
@@ -177,6 +179,8 @@ class VehicleAuto(VehicleMotion):
         self.hold_position()
 
     def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
+        if self.get_mode() != 'GUIDED':
+            self.set_mode('GUIDED')
         pos = self.recv_msg('LOCAL_POSITION_NED', timeout=0.5)
         if not pos:
             raise RuntimeError("No LOCAL_POSITION_NED message received")
