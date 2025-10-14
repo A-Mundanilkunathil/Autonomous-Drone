@@ -161,7 +161,6 @@ class VehicleAuto(VehicleMotion):
         self._stream_velocity_body(0.0, 0.0,  speed, 0.0, duration, rate_hz)
     def rotate(self, yaw_rate_deg_s=30, duration=2.0, rate_hz=10):
         self._stream_velocity_body(0.0,0.0,0.0,yaw_rate_deg_s,duration,rate_hz)
-
     def move_diagonal_front_right(self, speed=1.0, duration=2.0, rate_hz=10):
         self._stream_velocity_body(speed, speed, 0.0, 0.0, duration, rate_hz)
     def move_diagonal_front_left(self, speed=1.0, duration=2.0, rate_hz=10):
@@ -170,7 +169,24 @@ class VehicleAuto(VehicleMotion):
         self._stream_velocity_body(-speed, speed,0.0, 0.0, duration, rate_hz)
     def move_diagonal_back_left(self, speed=1.0, duration=2.0, rate_hz=10):
         self._stream_velocity_body(-speed,-speed,0.0, 0.0, duration, rate_hz)
-
+    def move_diagonal_front_right_up(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, speed, -speed, 0.0, duration, rate_hz)
+    def move_diagonal_front_left_up(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed,-speed,-speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_right_up(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, speed,-speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_left_up(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed,-speed,-speed, 0.0, duration, rate_hz)
+    def move_diagonal_front_right_down(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, speed,  speed, 0.0, duration, rate_hz)
+    def move_diagonal_front_left_down(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed,-speed,  speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_right_down(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, speed,  speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_left_down(self, speed=1.0, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed,-speed,  speed, 0.0, duration, rate_hz)
+    
+    # TODO: add CW and CCW parameters
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
@@ -180,6 +196,7 @@ class VehicleAuto(VehicleMotion):
         self.move_left(speed,    leg_s, rate_hz)
         self.hold_position()
 
+    # TODO: add CW and CCW parameters
     def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
