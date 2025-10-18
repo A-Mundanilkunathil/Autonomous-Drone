@@ -1,5 +1,9 @@
 import logging
 import time
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src/control'))
+
 from vehicle_auto import VehicleAuto
 from session import MavSession
 
@@ -24,11 +28,20 @@ def main():
         # Hover for 2 seconds
         time.sleep(2.0)
         
-        # Move forward then stop
-        auto.move_backward(speed=2, duration=8.0, rate_hz=10) 
+        # Turn left
+        auto.turn_left()
+
+        # Hover for 2 seconds
+        time.sleep(2.0)
         
-        # Move backward then stop
-        auto.move_forward(speed=2, duration=2.0, rate_hz=10)
+        # Turn right
+        auto.turn_right()
+
+        # # Move forward then stop
+        # auto.move_backward(speed=2, duration=8.0, rate_hz=10) 
+        
+        # # Move backward then stop
+        # auto.move_forward(speed=2, duration=2.0, rate_hz=10)
     
         # # Move diagonal front right up
         # auto.move_diagonal_front_right_up(speed=0.5, duration=2.0, rate_hz=10)
@@ -81,11 +94,11 @@ def main():
         # # Move diagonal back left
         # auto.move_diagonal_back_left(speed=0.5, duration=3.0, rate_hz=10)
 
-        # Move circle
-        auto.move_circle_global(radius=2.0, speed=1.0, duration=5, update_interval=0.1)
+        # # Move circle
+        # auto.move_circle_global(radius=2.0, speed=1.0, duration=5, update_interval=0.1)
 
-        # Move square
-        auto.move_square(speed=2.0, leg_s=2.0, rate_hz=10)
+        # # Move square
+        # auto.move_square(speed=2.0, leg_s=2.0, rate_hz=10)
 
         # Land then disarm
         auto.hold_position()

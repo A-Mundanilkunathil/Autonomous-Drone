@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', ''))
+
 import time
 from session import MavSession
 from vehicle_auto import VehicleAuto

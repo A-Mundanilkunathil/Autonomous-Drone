@@ -171,6 +171,17 @@ class VehicleAuto(VehicleMotion):
     def move_diagonal_back_left(self, speed=1.0, duration=2.0, rate_hz=10):
         self._stream_velocity_body(-speed,-speed,0.0, 0.0, duration, rate_hz)
 
+    # TODO: add movements with rotation
+    def turn_right(self):
+        self.rotate(30, 1.0, 10)
+    def turn_right_diagonal(self):
+        self.rotate(45, 1.0, 10)
+    def turn_left(self):
+        self.rotate(-30, 1.0, 10)
+    def turn_left_diagonal(self):
+        self.rotate(-45, 1.0, 10)
+
+    # TODO: add CW and CCW parameters
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
@@ -180,6 +191,7 @@ class VehicleAuto(VehicleMotion):
         self.move_left(speed,    leg_s, rate_hz)
         self.hold_position()
 
+    # TODO: add CW and CCW parameters
     def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
