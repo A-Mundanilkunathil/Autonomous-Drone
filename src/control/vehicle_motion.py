@@ -169,3 +169,62 @@ class VehicleMotion(VehicleBase):
 
     def hold_position(self) -> None:
         self.set_mode("LOITER")
+
+    # TODO: Remove once done testing
+    # ----------------- Simulation Motion (For Testing) -----------------
+    def move_forward_world(self, fwd, duration=2.0, rate_hz=10):
+        # Ensure GUIDED
+        if self.get_mode() != 'GUIDED':
+            self.set_mode('GUIDED')
+
+        dt = 1.0 / max(1.0, rate_hz) 
+        end = time.time() + duration
+        last_yaw = None
+
+        # Get initial yaw
+        att = self.recv_msg('ATTITUDE', timeout=0.3)
+        if att:
+            last_yaw = att.yaw
+        else:
+            vfr = self.recv_msg('VFR_HUD', timeout=0.1)  # VFR_HUD has yaw
+            if vfr and getattr(vfr, 'heading', None) is not None:
+                last_yaw = math.radians(vfr.heading)  # deg -> rad
+            else:
+                gpi = self.recv_msg('GLOBAL_POSITION_INT', timeout=0.1)
+                if gpi and getattr(gpi, 'hdg', None) not in (None, 65535):
+                    last_yaw = math.radians(gpi.hdg / 100.0)  # cdeg -> deg -> rad
+                else:
+                    last_yaw = 0.0  # safe default
+
+        type_mask = (
+            (1<<0)|(1<<1)|(1<<2) |   # ignore pos
+            (1<<6)|(1<<7)|(1<<8) |   # ignore accel
+            (1<<10)|(1<<11)          # ignore yaw & yaw_rate
+        )
+
+        while time.time() < end:
+            att = self.recv_msg('ATTITUDE', timeout=0.02)
+            if att:
+                last_yaw = att.yaw  # radians
+
+            # Use last known yaw; don't stall if we missed a frame
+            yaw = last_yaw if last_yaw is not None else 0.0
+            vx = fwd * math.cos(yaw)   # N (x)
+            vy = fwd * math.sin(yaw)   # E (y)
+
+            # quick guards
+            vx = max(-3.0, min(3.0, vx))
+            vy = max(-3.0, min(3.0, vy))
+
+            # Send world-frame velocity
+            self.conn.mav.set_position_target_local_ned_send(
+                0,
+                self.conn.target_system, self.conn.target_component,
+                mavutil.mavlink.MAV_FRAME_LOCAL_NED,
+                type_mask,
+                0, 0, 0,          # pos ignored
+                vx, vy, 0.0,      # velocity (m/s)
+                0, 0, 0,          # accel ignored
+                0.0, 0.0          # yaw, yaw_rate ignored
+            )
+            time.sleep(dt)

@@ -105,3 +105,12 @@ class VehicleBase:
                 log.info("Vehicle disarmed")
                 return
         raise RuntimeError("Disarm timeout")
+    
+    def disable_arm_check(self):
+        self.conn.mav.param_set_send(
+            self.conn.target_system,
+            self.conn.target_component,
+            b"ARMING_CHECK",
+            float(0), # Disable
+            mavutil.mavlink.MAV_PARAM_TYPE_INT32
+        )

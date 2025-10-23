@@ -171,15 +171,17 @@ class VehicleAuto(VehicleMotion):
     def move_diagonal_back_left(self, speed=1.0, duration=2.0, rate_hz=10):
         self._stream_velocity_body(-speed,-speed,0.0, 0.0, duration, rate_hz)
 
-    # TODO: add movements with rotation
+    # TODO: Movements with rotation
     def turn_right(self):
-        self.rotate(30, 1.0, 10)
+        self.rotate(35, 2.0, 10)
     def turn_right_diagonal(self):
-        self.rotate(45, 1.0, 10)
+        self.rotate(45, 2.0, 10)
     def turn_left(self):
-        self.rotate(-30, 1.0, 10)
+        self.rotate(-35, 2.0, 10)
     def turn_left_diagonal(self):
-        self.rotate(-45, 1.0, 10)
+        self.rotate(-45, 2.0, 10)
+    def turn_around(self):
+        self.rotate(180, 2.0, 10)
 
     # TODO: add CW and CCW parameters
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):

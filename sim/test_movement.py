@@ -23,19 +23,24 @@ def main():
     sess.start_pump()
 
     try:
+        auto.disable_arm_check() # Disable arming check
         auto.guided_takeoff(4.0) # Takeoff to 4m
-        
-        # Hover for 2 seconds
         time.sleep(2.0)
         
         # Turn left
         auto.turn_left()
-
-        # Hover for 2 seconds
         time.sleep(2.0)
         
         # Turn right
         auto.turn_right()
+        auto.move_forward_world(0.5, 4.0, 10)
+
+        auto.turn_right()
+        auto.move_forward_world(0.5, 4.0, 10)
+        
+        # Turn around
+        auto.turn_around()
+        time.sleep(2.0)
 
         # # Move forward then stop
         # auto.move_backward(speed=2, duration=8.0, rate_hz=10) 
