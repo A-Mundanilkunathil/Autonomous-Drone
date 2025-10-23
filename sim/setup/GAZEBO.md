@@ -55,7 +55,7 @@ gz sim
 
 **Run with ArduPilot SITL**
 ```bash
-cd ~/ardupilot
+cd ardupilot
 Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --map --console
 ```
 

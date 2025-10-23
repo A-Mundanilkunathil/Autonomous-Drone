@@ -54,6 +54,8 @@ sudo apt install ros-jazzy-mavros ros-jazzy-mavros-extras
 wget https://raw.githubusercontent.com/mavlink/mavros/ros2/mavros/scripts/install_geographiclib_datasets.sh
 chmod +x install_geographiclib_datasets.sh
 sudo ./install_geographiclib_datasets.sh
+```
 
-ros2 run mavros mavros_node --ros-args -p fcu_url:=tcp://localhost:5760
+```
+ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://@127.0.0.1:14550
 ```
