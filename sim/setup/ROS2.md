@@ -19,6 +19,7 @@ sudo apt install ros-jazzy-desktop -y
 
 **Install rosdep**
 ```bash
+sudo apt update
 sudo apt install python3-rosdep2 -y
 
 sudo rosdep init
@@ -32,11 +33,6 @@ source ~/.bashrc
 ```
 
 **Test ROS 2**
-```bash
-ros2 --version
-```
-
-**Run Demo (Optional)**
 ```bash
 # Terminal 1
 ros2 run demo_nodes_cpp talker

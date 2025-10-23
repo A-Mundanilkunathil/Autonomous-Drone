@@ -16,7 +16,7 @@ sudo apt install gz-jetty -y
 
 **ArduPilot Gazebo Plugin**
 ```bash
-cd ~/
+cd sim
 git clone https://github.com/ArduPilot/ardupilot_gazebo
 
 cd ardupilot_gazebo
