@@ -15,7 +15,7 @@ pyyaml
 packaging
 MAVProxy
 gnureadline
-PyQt5
+# PyQt5 Causes conflicts in Linux, do sudo apt install python3-pyqt5 instead
 pyqtgraph
 matplotlib
 pillow

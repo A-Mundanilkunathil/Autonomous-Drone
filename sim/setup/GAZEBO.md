@@ -32,8 +32,8 @@ sudo make install
 
 **Environment Setup**
 ```bash
-echo 'export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/ardupilot_gazebo/build:$GZ_SIM_SYSTEM_PLUGIN_PATH' >> ~/.bashrc
-echo 'export GZ_SIM_RESOURCE_PATH=~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/models:$GZ_SIM_RESOURCE_PATH' >> ~/.bashrc
+echo 'export GZ_SIM_SYSTEM_PLUGIN_PATH=$HOME/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/build:$GZ_SIM_SYSTEM_PLUGIN_PATH' >> ~/.bashrc
+echo 'export GZ_SIM_RESOURCE_PATH=$HOME/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/models:$HOME/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds:$GZ_SIM_RESOURCE_PATH' >> ~/.bashrc
 source ~/.bashrc
 ```
 
