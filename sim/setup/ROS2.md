@@ -14,13 +14,13 @@ echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/ros-a
 
 sudo apt update
 
-sudo apt install ros-jazzy-desktop -y
+sudo apt install ros-jazzy-desktop ros-dev-tools -y
 ```
 
 **Install rosdep**
 ```bash
 sudo apt update
-sudo apt install python3-rosdep2 -y
+sudo apt install python3-rosdep -y
 
 sudo rosdep init
 rosdep update
@@ -43,19 +43,30 @@ ros2 run demo_nodes_cpp listener
 
 **ROS 2 + Gazebo Integration**
 ```bash
-sudo apt install ros-jazzy-ros-gz -y
+sudo curl -fsSL https://packages.osrfoundation.org/gazebo.gpg \
+  -o /usr/share/keyrings/pkgs-osrf-archive-keyring.gpg
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/pkgs-osrf-archive-keyring.gpg] \
+http://packages.osrfoundation.org/gazebo/ubuntu-stable $(lsb_release -cs) main" | \
+  sudo tee /etc/apt/sources.list.d/gazebo-stable.list > /dev/null
+
+sudo apt update
+sudo apt install gz-harmonic ros-jazzy-ros-gz -y
 ```
 
 **MAVROS**
 ```
 sudo apt update
-sudo apt install ros-jazzy-mavros ros-jazzy-mavros-extras
+sudo apt install ros-jazzy-mavros ros-jazzy-mavros-extras -y
 
 wget https://raw.githubusercontent.com/mavlink/mavros/ros2/mavros/scripts/install_geographiclib_datasets.sh
 chmod +x install_geographiclib_datasets.sh
 sudo ./install_geographiclib_datasets.sh
 ```
 
+**Connect to Ros2**
 ```
-ros2 run mavros mavros_node --ros-args -p fcu_url:=udp://@127.0.0.1:14550
+ros2 run mavros mavros_node --ros-args \
+  -p fcu_url:=udp://0.0.0.0:14550@ \
+  -p tgt_system:=1 \
+  -p tgt_component:=1
 ```

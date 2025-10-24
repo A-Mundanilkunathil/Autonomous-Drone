@@ -42,6 +42,9 @@ source ~/.bashrc
 git clone https://github.com/ArduPilot/ardupilot.git
 
 cd ardupilot
+
+Tools/environment_install/install-prereqs-ubuntu.sh -y
+
 git submodule update --init --recursive
 
 ./waf configure --board sitl
@@ -53,13 +56,13 @@ git submodule update --init --recursive
 gz sim
 ```
 
-**Run with ArduPilot SITL**
+**Run ArduPilot SITL**
 ```bash
 cd ardupilot
-Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --map --console
+Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON
 ```
 
 **Launch Gazebo**
 ```
-gz sim ~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds/iris_runway.sdf
+gz sim -v4 ~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds/iris_runway.sdf
 ```
