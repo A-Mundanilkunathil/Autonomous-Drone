@@ -88,7 +88,7 @@ class MavrosServices:
         req = CommandTOL.Request()
         req.altitude = altitude
 
-        future = self.takeoff_clienet.call_async(req)
+        future = self.takeoff_client.call_async(req)
         rclpy.spin_until_future_complete(self.node, future, timeout_sec=timeout_sec)
 
         if future.result() is not None:

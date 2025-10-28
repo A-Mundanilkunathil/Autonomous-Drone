@@ -3,6 +3,7 @@ Subscribers receive data FROM the drone via MAVROS
 """
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import NavSatFix, Imu
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import State
@@ -16,12 +17,20 @@ class MavrosSubscribers:
         self.local_position = None
         self.velocity = None
 
+        # QoS profile
+        qos_profile = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT, 
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10
+        )
+
         # Subscribe to drone state (armed, mode, connected)
         self.state_sub = node.create_subscription(
             State,
             '/mavros/state',
             self._state_callback,
-            10
+            qos_profile  
         )
 
         # Subsribe to position
@@ -29,15 +38,15 @@ class MavrosSubscribers:
             PoseStamped,
             '/mavros/local_position/pose',
             self._local_pos_callback,
-            10
+            qos_profile  
         )
-
+        
         # Subscribe to velocity
         self.velocity_sub = node.create_subscription(
             TwistStamped,
             '/mavros/local_position/velocity_local',
             self._velocity_callback,
-            10
+            qos_profile  
         )
 
         node.get_logger().info('MAVROS Subscribers initialized.')
