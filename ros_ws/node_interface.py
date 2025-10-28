@@ -60,7 +60,7 @@ class AutonomousDroneNode(Node):
         start_time = time.time()
         
         while (time.time() - start_time) < timeout:
-            # Get current position (NED frame: Z is down)
+            # Get current position 
             pos = self.mavros_subs.get_position()
             current_alt = abs(pos[2])  
             
@@ -93,12 +93,14 @@ class AutonomousDroneNode(Node):
         """
         Move with velocity for specified duration
         
+        Uses BODY frame (FLU: Forward-Left-Up convention)
+        
         Args:
             vx: Forward/backward velocity (m/s, positive = forward)
-            vy: Left/right velocity (m/s, positive = right)  
-            vz: Up/down velocity (m/s, positive = down in NED)
+            vy: Left/right velocity (m/s, positive = LEFT, negative = RIGHT)
+            vz: Up/down velocity (m/s, positive = DOWN, negative = UP)
             duration: How long to move (seconds)
-            yaw_rate: Rotation rate (deg/s, positive = clockwise)
+            yaw_rate: Rotation rate (deg/s, positive = LEFT, negative = RIGHT)
         
         Usage: node.move_body_velocity(1.0, 0, 0, 5.0)  # Move forward 1m/s for 5s
         """
@@ -115,8 +117,14 @@ class AutonomousDroneNode(Node):
         """
         Go to position and hold
         
-        Why: Waypoint navigation
-        Usage: node.goto_position(10, 5, -5, 10.0)  # Go to (10,5,-5) over 10s
+        Uses ENU frame (East-North-Up)
+        
+        Args:
+            x: East position (meters)
+            y: North position (meters) 
+            z: Altitude (meters, positive = up)
+        
+        Usage: node.goto_position(10, 5, 5.0, 10.0)  # Go 10m east, 5m north, 5m altitude
         """
         import time
         rate_hz = 10
@@ -222,12 +230,12 @@ class AutonomousDroneNode(Node):
         self.move_body_velocity(vx=0.0, vy=speed, vz=0.0, duration=duration)
         
     def move_up(self, speed: float, duration: float):
-        """Move up in body frame (NED: negative Z is up)"""
+        """Move up in body frame (FLU: negative Z is up)"""
         self.get_logger().info(f'Moving up at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=-speed, duration=duration)
         
     def move_down(self, speed: float, duration: float):
-        """Move down in body frame (NED: positive Z is down)"""
+        """Move down in body frame (FLU: positive Z is down)"""
         self.get_logger().info(f'Moving down at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=speed, duration=duration)
         
