@@ -62,7 +62,7 @@ class AutonomousDroneNode(Node):
         while (time.time() - start_time) < timeout:
             # Get current position (NED frame: Z is down)
             pos = self.mavros_subs.get_position()
-            current_alt = -pos[2]  # Convert NED to altitude above ground
+            current_alt = abs(pos[2])  
             
             self.get_logger().info(
                 f'Current altitude: {current_alt:.2f}m / Target: {altitude}m',
@@ -79,11 +79,11 @@ class AutonomousDroneNode(Node):
             time.sleep(0.5)
         
         if target_reached:
-            final_alt = -self.mavros_subs.get_position()[2]
+            final_alt = abs(self.mavros_subs.get_position()[2])
             self.get_logger().info(f'Takeoff successful! Reached {final_alt:.2f}m')
             return True
         else:
-            final_alt = -self.mavros_subs.get_position()[2]
+            final_alt = abs(self.mavros_subs.get_position()[2])
             self.get_logger().warn(
                 f'Takeoff timeout! Only reached {final_alt:.2f}m in {timeout}s'
             )
@@ -147,7 +147,7 @@ class AutonomousDroneNode(Node):
         
         while (time.time() - start_time) < timeout:
             pos = self.mavros_subs.get_position()
-            current_alt = -pos[2]  # NED to altitude
+            current_alt = abs(pos[2]) 
             
             self.get_logger().info(
                 f'Landing... altitude: {current_alt:.2f}m',
@@ -186,16 +186,18 @@ def main(args=None):
 
         node.get_logger().info('MAVROS connected.')
         
-        node.arm_and_takeoff(altitude=5.0)
-        node.land()
-
-        # Keep the node alive
-        rclpy.spin(node)
-    
+        # Perform mission: takeoff, hover, land
+        if node.arm_and_takeoff(altitude=5.0):
+            node.get_logger().info('Takeoff complete! Hovering for 5 seconds...')
+            import time
+            time.sleep(5)
+            node.land()
+            node.get_logger().info('Mission complete!')
+        else:
+            node.get_logger().error('Takeoff failed!') 
     except KeyboardInterrupt:
         node.get_logger().info('Shutting down...')
     finally:
-        node.land()
         node.destroy_node()
         rclpy.shutdown()
 
