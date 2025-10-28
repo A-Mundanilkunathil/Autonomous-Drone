@@ -56,7 +56,7 @@ class AutonomousDroneNode(Node):
         
         # Wait for drone to reach altitude (with tolerance)
         target_reached = False
-        altitude_tolerance = 0.3  # Within 30cm 
+        altitude_tolerance = 0.5 
         start_time = time.time()
         
         while (time.time() - start_time) < timeout:
@@ -89,11 +89,17 @@ class AutonomousDroneNode(Node):
             )
             return False
 
-    def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0):
+    def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0, yaw_rate: float = 0.0):
         """
         Move with velocity for specified duration
         
-        Why: Simple "move forward for 2 seconds" commands
+        Args:
+            vx: Forward/backward velocity (m/s, positive = forward)
+            vy: Left/right velocity (m/s, positive = right)  
+            vz: Up/down velocity (m/s, positive = down in NED)
+            duration: How long to move (seconds)
+            yaw_rate: Rotation rate (deg/s, positive = clockwise)
+        
         Usage: node.move_body_velocity(1.0, 0, 0, 5.0)  # Move forward 1m/s for 5s
         """
         import time
@@ -102,7 +108,7 @@ class AutonomousDroneNode(Node):
         end_time = time.time() + duration
 
         while time.time() < end_time:
-            self.mavros_pubs.publish_velocity_body(vx, vy, vz)
+            self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
             time.sleep(dt)
         
     def goto_position(self, x: float, y: float, z: float, duration: float = 5.0):
@@ -172,6 +178,68 @@ class AutonomousDroneNode(Node):
         else:
             self.get_logger().warn(f'Landing timeout after {timeout}s')
             return False
+        
+    def hover(self, duration: float = 5.0):
+        """
+        Hover in place for specified duration
+        
+        Sends zero velocity commands to maintain position
+        
+        Args:
+            duration: How long to hover (seconds)
+        """
+        import time
+        rate_hz = 10
+        dt = 1.0 / rate_hz
+        end_time = time.time() + duration
+        
+        self.get_logger().info(f'Hovering for {duration}s')
+
+        while time.time() < end_time:
+            # Send zero velocity to hold position
+            self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
+            time.sleep(dt)
+
+    # ------------------------- High-level missions -------------------------
+    def move_forward(self, speed: float, duration: float):
+        """Move forward in body frame"""
+        self.get_logger().info(f'Moving forward at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=speed, vy=0.0, vz=0.0, duration=duration)
+        
+    def move_backward(self, speed: float, duration: float):
+        """Move backward in body frame"""
+        self.get_logger().info(f'Moving backward at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=0.0, vz=0.0, duration=duration)
+        
+    def move_right(self, speed: float, duration: float):
+        """Move right in body frame"""
+        self.get_logger().info(f'Moving right at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=-speed, vz=0.0, duration=duration)
+        
+    def move_left(self, speed: float, duration: float):
+        """Move left in body frame"""
+        self.get_logger().info(f'Moving left at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=speed, vz=0.0, duration=duration)
+        
+    def move_up(self, speed: float, duration: float):
+        """Move up in body frame (NED: negative Z is up)"""
+        self.get_logger().info(f'Moving up at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=0.0, vz=-speed, duration=duration)
+        
+    def move_down(self, speed: float, duration: float):
+        """Move down in body frame (NED: positive Z is down)"""
+        self.get_logger().info(f'Moving down at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=0.0, vz=speed, duration=duration)
+        
+    def rotate_left(self, yaw_rate: float, duration: float):
+        """Rotate left (counter-clockwise)"""
+        self.get_logger().info(f'Rotating left at {yaw_rate}°/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=0.0, vz=0.0, duration=duration, yaw_rate=yaw_rate)
+        
+    def rotate_right(self, yaw_rate: float, duration: float):
+        """Rotate right (clockwise)"""
+        self.get_logger().info(f'Rotating right at {yaw_rate}°/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=0.0, vz=0.0, duration=duration, yaw_rate=-yaw_rate)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -186,11 +254,32 @@ def main(args=None):
 
         node.get_logger().info('MAVROS connected.')
         
-        # Perform mission: takeoff, hover, land
+        # Perform simple test mission
         if node.arm_and_takeoff(altitude=5.0):
-            node.get_logger().info('Takeoff complete! Hovering for 5 seconds...')
-            import time
-            time.sleep(5)
+            node.get_logger().info('Takeoff complete!')
+            
+            # Hover briefly
+            node.hover(3.0)
+
+            # Test forward/backward
+            node.move_forward(speed=1.0, duration=3.0)
+            node.hover(2.0)
+            node.move_backward(speed=1.0, duration=3.0)
+            node.hover(2.0)
+
+            # Test left/right
+            node.move_right(speed=1.0, duration=3.0)
+            node.hover(2.0)
+            node.move_left(speed=1.0, duration=3.0)
+            node.hover(2.0)
+
+            # Test rotation
+            node.rotate_right(yaw_rate=30.0, duration=3.0)  # ~90° turn
+            node.hover(2.0)
+            node.rotate_left(yaw_rate=30.0, duration=3.0)   # Turn back
+            node.hover(2.0)
+            
+            # Land
             node.land()
             node.get_logger().info('Mission complete!')
         else:
