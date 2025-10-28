@@ -23,7 +23,17 @@ class AutonomousDroneNode(Node):
         # TODO: Add control logic here
         pass
 
-    def arm_and_takeoff(self, altitude: float) -> bool:
+    def arm_and_takeoff(self, altitude: float, timeout: float = 30.0) -> bool:
+        """
+        Arm and takeoff to target altitude, waiting until reached
+        
+        Args:
+            altitude: Target altitude in meters
+            timeout: Maximum time to wait for altitude (seconds)
+        
+        Returns:
+            True if successful and altitude reached
+        """
         self.get_logger().info(f'Starting takeoff to {altitude}m...')
 
         # Set mode to GUIDED
@@ -38,12 +48,46 @@ class AutonomousDroneNode(Node):
             return False
         time.sleep(1.0)  # Wait a moment for arming
 
-        # Takeoff
+        # Send takeoff command
         if not self.mavros_srvs.takeoff(altitude):
             return False
         
-        self.get_logger().info('Takeoff successful.')
-        return True
+        self.get_logger().info(f'Takeoff command sent. Waiting for altitude {altitude}m...')
+        
+        # Wait for drone to reach altitude (with tolerance)
+        target_reached = False
+        altitude_tolerance = 0.3  # Within 30cm 
+        start_time = time.time()
+        
+        while (time.time() - start_time) < timeout:
+            # Get current position (NED frame: Z is down)
+            pos = self.mavros_subs.get_position()
+            current_alt = -pos[2]  # Convert NED to altitude above ground
+            
+            self.get_logger().info(
+                f'Current altitude: {current_alt:.2f}m / Target: {altitude}m',
+                throttle_duration_sec=1.0  # Log once per second
+            )
+            
+            # Check if we've reached target altitude
+            if abs(current_alt - altitude) < altitude_tolerance:
+                target_reached = True
+                break
+            
+            # Spin to process callbacks and sleep
+            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.5)
+        
+        if target_reached:
+            final_alt = -self.mavros_subs.get_position()[2]
+            self.get_logger().info(f'Takeoff successful! Reached {final_alt:.2f}m')
+            return True
+        else:
+            final_alt = -self.mavros_subs.get_position()[2]
+            self.get_logger().warn(
+                f'Takeoff timeout! Only reached {final_alt:.2f}m in {timeout}s'
+            )
+            return False
 
     def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0):
         """
@@ -76,6 +120,58 @@ class AutonomousDroneNode(Node):
         while time.time() < end_time:
             self.mavros_pubs.publish_position(x, y, z)
             time.sleep(dt)
+    
+    def land(self, timeout: float = 30.0) -> bool:
+        """
+        Command the drone to land and wait until on ground
+        
+        Args:
+            timeout: Maximum time to wait for landing (seconds)
+        
+        Returns:
+            True if successfully landed
+        """
+        self.get_logger().info('Starting landing sequence...')
+        
+        # Send land command
+        if not self.mavros_srvs.land():
+            self.get_logger().error('Land command failed')
+            return False
+        
+        import time
+        
+        # Wait for drone to land (altitude near 0)
+        ground_threshold = 0.2  # Consider landed if below 20cm
+        start_time = time.time()
+        landed = False
+        
+        while (time.time() - start_time) < timeout:
+            pos = self.mavros_subs.get_position()
+            current_alt = -pos[2]  # NED to altitude
+            
+            self.get_logger().info(
+                f'Landing... altitude: {current_alt:.2f}m',
+                throttle_duration_sec=1.0
+            )
+            
+            # Check if on ground
+            if current_alt < ground_threshold:
+                landed = True
+                break
+            
+            rclpy.spin_once(self, timeout_sec=0.1)
+            time.sleep(0.5)
+        
+        if landed:
+            self.get_logger().info('Landed successfully')
+            
+            # Wait a moment, then disarm
+            time.sleep(4.0)
+            self.mavros_srvs.arm(False)
+            return True
+        else:
+            self.get_logger().warn(f'Landing timeout after {timeout}s')
+            return False
 
 def main(args=None):
     rclpy.init(args=args)
@@ -91,13 +187,15 @@ def main(args=None):
         node.get_logger().info('MAVROS connected.')
         
         node.arm_and_takeoff(altitude=5.0)
-        
+        node.land()
+
         # Keep the node alive
         rclpy.spin(node)
     
     except KeyboardInterrupt:
         node.get_logger().info('Shutting down...')
     finally:
+        node.land()
         node.destroy_node()
         rclpy.shutdown()
 

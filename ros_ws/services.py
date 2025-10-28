@@ -15,6 +15,9 @@ class MavrosServices:
         # Takeoff service
         self.takeoff_client = node.create_client(CommandTOL, "/mavros/cmd/takeoff")
 
+        # Land service
+        self.land_client = node.create_client(CommandTOL, "/mavros/cmd/land")
+
         node.get_logger().info('MAVROS Services initialized.')
 
     def arm(self, value: bool = True, timeout_sec=5.0) -> bool:
@@ -94,5 +97,27 @@ class MavrosServices:
         if future.result() is not None:
             if future.result().success:
                 self.node.get_logger().info(f'Takeoff to {altitude}m successful.')
+                return True
+        return False
+    
+    def land(self, timeout_sec=5.0) -> bool:
+        """
+        Command the drone to land at current position
+        
+        Why: Initiate landing sequence
+        """
+        if not self.land_client.wait_for_service(timeout_sec=timeout_sec):
+            self.node.get_logger().error('Land service not available.')
+            return False
+        
+        req = CommandTOL.Request()
+        req.altitude = 0.0  # Land at ground level
+
+        future = self.land_client.call_async(req)
+        rclpy.spin_until_future_complete(self.node, future, timeout_sec=timeout_sec)
+
+        if future.result() is not None:
+            if future.result().success:
+                self.node.get_logger().info('Landing initiated successfully.')
                 return True
         return False
