@@ -33,5 +33,6 @@ python3 " perception/object_detector.py"
 
 **Run autonomous drone**
 ```
-python node_interface.py
+cd ~/Desktop/Autonomous-Drone/ros_ws
+python3 node_interface.py
 ```

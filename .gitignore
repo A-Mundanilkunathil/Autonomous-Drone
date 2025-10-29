@@ -3,3 +3,4 @@ calibration_images/
 .python-version
 .DS_Store
 venv/ 
+*.pt
