@@ -1,6 +1,7 @@
 import socket, struct, time, threading, collections
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
 import cv2
@@ -26,9 +27,16 @@ class UdpFrameReceiver(Node):
         self.expected_width = int(self.declare_parameter('expected_width', 640).value)
         self.expected_height = int(self.declare_parameter('expected_height', 480).value)
 
+        # QoS profile
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=5
+        )
+
         # ROS pubs
-        self.pub_img = self.create_publisher(Image, '/camera/image_raw', 10)
-        self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
+        self.pub_img = self.create_publisher(Image, '/camera/image_raw', qos_profile)
+        self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', qos_profile)
         self.bridge = CvBridge()
 
         # CameraInfo
@@ -51,7 +59,7 @@ class UdpFrameReceiver(Node):
                         0.0, 0.0, 1.0, 0.0]
 
         # Load calibration if provided
-        calib_path = self.declare_parameter('calib_path', '').value
+        calib_path = self.declare_parameter('calib_npz', '').value
         if calib_path and calib_path != '':
             try:
                 self.cam_info = self.load_caminfo_from_npz(calib_path)

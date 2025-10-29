@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
@@ -11,14 +12,25 @@ class ObjectDetectorNode(Node):
         super().__init__('object_detector')
 
         self.bridge = CvBridge()
+        
+        # QoS profile 
+        qos_profile = QoSProfile(
+            reliability=QoSReliabilityPolicy.BEST_EFFORT,
+            history=QoSHistoryPolicy.KEEP_LAST,
+            depth=5
+        )
 
         # Subscribe to camera
         self.image_sub = self.create_subscription(
             Image,
             '/camera/image_raw',
             self.image_callback,
-            10
+            qos_profile
         )
+        
+        # Statistics
+        self.frame_count = 0
+        self.detection_count = 0
 
         # Publish detected objects
         self.detection_pub = self.create_publisher(
@@ -48,8 +60,10 @@ class ObjectDetectorNode(Node):
             self.get_logger().error('Detector not initialized')
             return
         
+        self.frame_count += 1
+        
         # Run detection
-        results = self.detector.predict(cv_image)
+        results = self.detector.predict(cv_image, verbose=False)
 
         # Convert results to ROS messages
         detection_array_msg = Detection2DArray()
@@ -73,16 +87,31 @@ class ObjectDetectorNode(Node):
             det.results.append(hypothesis)
 
             detection_array_msg.detections.append(det)
+            self.detection_count += 1
 
         # Publish results
-        self.detection_pub.publish(detection_array_msg)
+        if len(detection_array_msg.detections) > 0:
+            self.detection_pub.publish(detection_array_msg)
+            self.get_logger().info(
+                f'Frame {self.frame_count}: Detected {len(detection_array_msg.detections)} objects',
+                throttle_duration_sec=2.0
+            )
 
 def main(args=None):
     rclpy.init(args=args)
     node = ObjectDetectorNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.get_logger().info(
+            f'Shutting down - Processed {node.frame_count} frames, '
+            f'{node.detection_count} total detections'
+        )
+        node.destroy_node()
+        rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
