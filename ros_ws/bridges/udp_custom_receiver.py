@@ -97,11 +97,24 @@ class UdpFrameReceiver(Node):
     
     def load_caminfo_from_npz(self, path: str) -> CameraInfo:
         data = np.load(path)
-        K = data.get('mtx', data.get('K'))
-        D = data.get('dist', data.get('D'))
+        
+        # Camera matrix
+        K = data.get('mtx')
+        if K is None:
+            K = data.get('K')
+        if K is None:
+            K = data.get('camera_matrix')
+        
+        # Distortion coefficients
+        D = data.get('dist')
+        if D is None:
+            D = data.get('D')
+        if D is None:
+            D = data.get('dist_coeffs')
 
         if K is None or D is None:
-            raise ValueError('Invalid calibration data in NPZ file')
+            available_keys = list(data.keys())
+            raise ValueError(f'Invalid calibration data in NPZ file. Available keys: {available_keys}. Expected keys: mtx/K/camera_matrix and dist/D/dist_coeffs')
         
         cam_info = CameraInfo()
         cam_info.width = int(data.get('width', self.expected_width))
@@ -110,7 +123,7 @@ class UdpFrameReceiver(Node):
         cam_info.k = K.astype(float).flatten().tolist()
         cam_info.d = D.astype(float).flatten().tolist()
 
-        # Identiy rectification and projection from K
+        # Identity rectification and projection from K
         cam_info.r = [1.0, 0.0, 0.0,
                        0.0, 1.0, 0.0,
                        0.0, 0.0, 1.0]
