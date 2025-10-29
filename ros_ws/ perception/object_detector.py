@@ -12,6 +12,7 @@ class ObjectDetectorNode(Node):
         super().__init__('object_detector')
 
         self.bridge = CvBridge()
+        self.camera_connected = False
         
         # QoS profile 
         qos_profile = QoSProfile(
@@ -53,8 +54,16 @@ class ObjectDetectorNode(Node):
             return None
             
     def image_callback(self, msg):
+        if not self.camera_connected:
+            self.get_logger().info('Camera stream connected!')
+            self.camera_connected = True
+
         # Convert ROS image to OpenCV
-        cv_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        try:
+            cv_image = self.bridge.imgmsg_to_cv2(msg, 'bgr8')
+        except Exception as e:
+            self.get_logger().error(f'Failed to convert ROS image to OpenCV: {e}')
+            return
 
         if not self.detector:
             self.get_logger().error('Detector not initialized')

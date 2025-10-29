@@ -1,4 +1,4 @@
-**Connect to ROS2**
+**Connect flight controller to ROS2**
 - For simulation
   ```
   ros2 run mavros mavros_node --ros-args \
@@ -15,7 +15,23 @@
   -p tgt_component:=1
   ```
 
-  **Run**
-  ```
-  python node_interface.py
-  ```
+**Run camera stream**
+```
+cd ~/Desktop/Autonomous-Drone/ros_ws/bridges
+python3 udp_custom_receiver.py --ros-args \
+  -p calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/bridges/camera_calib.npz \
+  -p port:=5005 \
+  -p expected_width:=640 \
+  -p expected_height:=480
+```
+
+**Run object detector**
+```
+cd ~/Desktop/Autonomous-Drone/ros_ws
+python3 " perception/object_detector.py"
+```
+
+**Run autonomous drone**
+```
+python node_interface.py
+```
