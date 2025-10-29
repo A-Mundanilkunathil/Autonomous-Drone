@@ -1,0 +1,266 @@
+import socket, struct, time, threading, collections
+import rclpy
+from rclpy.node import Node
+from sensor_msgs.msg import Image, CameraInfo
+from cv_bridge import CvBridge
+import cv2
+import numpy as np
+
+# UDP packet structure
+# uint32_t: frame_id
+# uint16_t: packet_num
+# uint16_t: total_packets
+# uint32_t: frame_size
+# uint16_t: data_size
+HDR_FMT = "<IHHIH" # 4 + 2 + 2 + 4 + 2 = 14 bytes
+HDR_SIZE = struct.calcsize(HDR_FMT)
+
+class UdpFrameReceiver(Node):
+    def __init__(self):
+        super().__init__('udp_frame_receiver')
+
+        # Parameters
+        self.port = int(self.declare_parameter('port', 5005).value)
+        self.bind_ip = self.declare_parameter('bind_ip', '0.0.0.0').value
+        self.frame_id_str = self.declare_parameter('frame_id', 'camera').value
+        self.expected_width = int(self.declare_parameter('expected_width', 640).value)
+        self.expected_height = int(self.declare_parameter('expected_height', 480).value)
+
+        # ROS pubs
+        self.pub_img = self.create_publisher(Image, '/camera/image_raw', 10)
+        self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', 10)
+        self.bridge = CvBridge()
+
+        # CameraInfo
+        self.cam_info = CameraInfo()
+        self.cam_info.width  = self.expected_width
+        self.cam_info.height = self.expected_height
+        self.cam_info.distortion_model = 'plumb_bob'
+        self.cam_info.d = [0.0, 0.0, 0.0, 0.0, 0.0]
+        fx = fy = 600.0
+        cx = self.cam_info.width  / 2.0
+        cy = self.cam_info.height / 2.0
+        self.cam_info.k = [fx, 0.0, cx,
+                        0.0, fy, cy,
+                        0.0, 0.0, 1.0]
+        self.cam_info.r = [1.0,0.0,0.0,
+                        0.0,1.0,0.0,
+                        0.0,0.0,1.0]
+        self.cam_info.p = [fx, 0.0, cx, 0.0,
+                        0.0, fy, cy, 0.0,
+                        0.0, 0.0, 1.0, 0.0]
+
+        # Load calibration if provided
+        calib_path = self.declare_parameter('calib_path', '').value
+        if calib_path and calib_path != '':
+            try:
+                self.cam_info = self.load_caminfo_from_npz(calib_path)
+                self.get_logger().info(f'Loaded camera calibration from {calib_path}')
+            except FileNotFoundError:
+                self.get_logger().warning(f'Calibration file not found: {calib_path}')
+            except Exception as e:
+                self.get_logger().warning(f'Failed to load calibration: {e}')
+
+        # UDP socket
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.bind((self.bind_ip, self.port))
+        self.sock.settimeout(0.5)
+
+        # Reassembly buffers: frame_id -> dict(packet_num->bytes) + metadata
+        self.frames = {} 
+        self.lock = threading.Lock()
+        
+        # Statistics
+        self.stats = {
+            'frames_received': 0,
+            'frames_decoded': 0,
+            'frames_dropped': 0,
+            'last_log_time': time.time()
+        }
+
+        # Background receiver thread
+        self.running = True
+        self.rx_thread = threading.Thread(target=self.rx_loop, daemon=True)
+        self.rx_thread.start()
+
+        # Periodic flush of stale frames
+        self.timer = self.create_timer(0.5, self.flush_stale_frames)
+        self.get_logger().info(f'UDP Frame Receiver initialized on {self.bind_ip}:{self.port}')
+    
+    def load_caminfo_from_npz(self, path: str) -> CameraInfo:
+        data = np.load(path)
+        K = data.get('mtx', data.get('K'))
+        D = data.get('dist', data.get('D'))
+
+        if K is None or D is None:
+            raise ValueError('Invalid calibration data in NPZ file')
+        
+        cam_info = CameraInfo()
+        cam_info.width = int(data.get('width', self.expected_width))
+        cam_info.height = int(data.get('height', self.expected_height))
+        cam_info.distortion_model = 'plumb_bob'
+        cam_info.k = K.astype(float).flatten().tolist()
+        cam_info.d = D.astype(float).flatten().tolist()
+
+        # Identiy rectification and projection from K
+        cam_info.r = [1.0, 0.0, 0.0,
+                       0.0, 1.0, 0.0,
+                       0.0, 0.0, 1.0]
+        cam_info.p = [K[0,0], 0.0, K[0,2], 0.0,
+                       0.0, K[1,1], K[1,2], 0.0,
+                       0.0, 0.0, 1.0, 0.0]
+        return cam_info
+
+    def rx_loop(self):
+        """Background thread to receive UDP packets"""
+        while self.running:
+            try:
+                data, _ = self.sock.recvfrom(2048)
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self.running:  # Only log if not shutting down
+                    self.get_logger().error(f'UDP receive error: {e}')
+                continue
+
+            if len(data) < HDR_SIZE:
+                continue
+            
+            try:
+                # Parse header
+                (fid, pkt_no, total_pkts, frame_size, data_size) = struct.unpack(HDR_FMT, data[:HDR_SIZE])
+                payload = data[HDR_SIZE:HDR_SIZE+data_size]
+                if len(payload) != data_size:
+                    continue
+
+                # Variable to hold completed frame data (outside lock)
+                completed_frame = None
+
+                # Store packet (only hold lock briefly)
+                with self.lock:
+                    f = self.frames.get(fid)
+                    if f is None:
+                        self.frames[fid] = f = {
+                            'total': total_pkts,
+                            'size': frame_size,
+                            'parts': {},
+                            'first_ts': time.time()
+                        }
+                    
+                    # De-duplicate
+                    if pkt_no not in f['parts']:
+                        f['parts'][pkt_no] = payload
+                        
+                        # Check if complete (do this inside lock)
+                        if len(f['parts']) == f['total']:
+                            # Extract data we need, then release lock quickly
+                            completed_frame = {
+                                'fid': fid,
+                                'parts': [f['parts'][i] for i in range(f['total'])],
+                                'size': f['size']
+                            }
+                            del self.frames[fid]
+                            self.stats['frames_received'] += 1
+
+                if completed_frame is not None:
+                    self.assemble_and_publish_async(completed_frame)
+            
+            except struct.error as e:
+                self.get_logger().warning(f'Packet parse error: {e}')
+            except Exception as e:
+                self.get_logger().error(f'Unexpected error in rx_loop: {e}')
+
+    def assemble_and_publish_async(self, frame_data):
+        """Assemble and publish frame without holding the lock"""
+        try:
+            # Concatenate parts
+            jpeg_bytes = b''.join(frame_data['parts'])
+
+            # Sanity check
+            if len(jpeg_bytes) != frame_data['size']:
+                self.get_logger().warning(f"Frame size mismatch: expected {frame_data['size']}, got {len(jpeg_bytes)}")
+                self.stats['frames_dropped'] += 1
+                return
+
+            # Decode JPEG -> BGR
+            npbuf = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+            frame = cv2.imdecode(npbuf, cv2.IMREAD_COLOR) 
+            if frame is None:
+                self.get_logger().warning('Failed to decode JPEG frame')
+                self.stats['frames_dropped'] += 1
+                return
+            
+            self.stats['frames_decoded'] += 1
+            
+            # Log stats every 5 seconds
+            now = time.time()
+            if now - self.stats['last_log_time'] > 5.0:
+                self.get_logger().info(
+                    f"Stats: Received={self.stats['frames_received']}, "
+                    f"Decoded={self.stats['frames_decoded']}, "
+                    f"Dropped={self.stats['frames_dropped']}"
+                )
+                self.stats['last_log_time'] = now
+            
+            # Publish
+            img_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
+            now = self.get_clock().now().to_msg()
+            img_msg.header.stamp = now
+            img_msg.header.frame_id = self.frame_id_str
+
+            # Publish CameraInfo
+            cam_info = self.cam_info
+            cam_info.header.stamp = now
+            cam_info.header.frame_id = self.frame_id_str  
+
+            self.pub_img.publish(img_msg)
+            self.pub_info.publish(cam_info)
+        
+        except Exception as e:
+            self.get_logger().error(f'Failed to assemble/publish frame: {e}')
+
+    def flush_stale_frames(self):
+        # Drop frames older than 0.5s
+        now = time.time()
+        stale = []
+        with self.lock:
+            for fid, f in self.frames.items():
+                if now - f['first_ts'] > 0.5:
+                    stale.append(fid)
+            for fid in stale:
+                del self.frames[fid]
+    
+    def destroy_node(self):
+        """Clean shutdown"""
+        self.get_logger().info('Shutting down UDP receiver...')
+        self.running = False
+        
+        # Close socket to unblock recvfrom
+        try:
+            self.sock.close()
+        except:
+            pass
+        
+        # Wait for thread to finish
+        if self.rx_thread.is_alive():
+            try:
+                self.rx_thread.join(timeout=2.0)
+            except:
+                pass
+        
+        super().destroy_node()
+
+def main():
+    rclpy.init()
+    node = UdpFrameReceiver()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
+            
