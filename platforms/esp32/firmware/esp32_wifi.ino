@@ -2,9 +2,11 @@
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <WiFiManager.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 
 WiFiUDP udp;
-uint32_t frame_id = 0;
 
 // ===== Default UDP settings =====
 char custom_ip[16] = "192.168.1.89";
@@ -14,6 +16,18 @@ WiFiManagerParameter port_param("target_port", "Target Port", custom_port, 6);
 
 IPAddress target_ip;
 int target_port;
+
+// Multithreading
+QueueHandle_t frame_queue;
+TaskHandle_t udp_task;
+volatile uint32_t frame_id = 0;
+
+struct FrameData {
+  uint8_t* data;
+  size_t length;
+  uint32_t id;
+  camera_fb_t* fb_ptr;
+};
 
 // ===== Camera pins =====
 #define PWDN_GPIO_NUM     32
@@ -40,6 +54,43 @@ struct PacketHeader {
   uint32_t frame_size;
   uint16_t data_size;
 } __attribute__((packed));
+
+// Camera task for capturing frames
+void cameraTask(void* parameter) {
+  while (true) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) {
+      vTaskDelay(1);
+      continue;
+    }
+
+    // Check if queue has space
+    if (uxQueueSpacesAvailable(frame_queue) > 0) {
+      FrameData frame_data;
+      frame_data.length = fb->len;
+      frame_data.id = ++frame_id;
+      frame_data.data = fb->buf;
+      frame_data.fb_ptr = fb;
+
+      xQueueSend(frame_queue, &frame_data, 0);
+    } else {
+      // If queue full, drop frame
+      esp_camera_fb_return(fb);
+    }
+  }
+}
+
+// UDP task handle transmission
+void udpTransmissionTask(void* parameter) {
+  FrameData frame_data;
+
+  while (true) {
+    if (xQueueReceive(frame_queue, &frame_data, portMAX_DELAY)) {
+      sendFrameUDP(frame_data.data, frame_data.length, frame_data.id);
+      esp_camera_fb_return(frame_data.fb_ptr);
+    }
+  }
+}
 
 void setup() {
   Serial.begin(115200);
@@ -95,38 +146,41 @@ void setup() {
   }
 
   udp.begin(target_port);
-  Serial.println("Camera initialized!");
+  Serial.println("Camera initialized, ready to stream!");
+
+  frame_queue = xQueueCreate(2, sizeof(FrameData)); // Queue for 2 frames
+  xTaskCreatePinnedToCore(cameraTask, "Camera", 4096, NULL, 3, NULL, 1); // Camera task on core 1
+  xTaskCreatePinnedToCore(udpTransmissionTask, "UDP", 8192, NULL, 1, &udp_task, 0); // UDP task on core 0
 }
 
 void loop() {
-  
-  camera_fb_t * fb = esp_camera_fb_get();
-  if (!fb) {
-    return;
+  static unsigned long lastReport = 0;
+  if (millis() - lastReport > 3000) {
+    Serial.printf("Frame ID: %lu, Queue spaces: %d\n", 
+                   frame_id, uxQueueSpacesAvailable(frame_queue));
+    lastReport = millis();
   }
+}
 
-  frame_id++;
- 
-  const int max_data_per_packet = 1446;  
-  uint16_t total_packets = (fb->len + max_data_per_packet - 1) / max_data_per_packet;
-  
+void sendFrameUDP(uint8_t* data, size_t length, uint32_t id) {
+  const int max_data_per_packet = 1446;
+  uint16_t total_packets = (length + max_data_per_packet - 1) / max_data_per_packet;
+
   for (uint16_t packet_num = 0; packet_num < total_packets; packet_num++) {
     PacketHeader header;
-    header.frame_id = frame_id;
+    header.frame_id = id;
     header.packet_num = packet_num;
     header.total_packets = total_packets;
-    header.frame_size = fb->len;
-    
+    header.frame_size = length;
+
     int offset = packet_num * max_data_per_packet;
-    int bytes_left = fb->len - offset;
+    int bytes_left = length - offset;
     header.data_size = (bytes_left > max_data_per_packet) ? max_data_per_packet : bytes_left;
-    
+
     udp.beginPacket(target_ip, target_port);
     udp.write((uint8_t*)&header, sizeof(header));
-    udp.write(fb->buf + offset, header.data_size);
+    udp.write(data + offset, header.data_size);
     udp.endPacket();
   }
-
-  esp_camera_fb_return(fb);
 }
 

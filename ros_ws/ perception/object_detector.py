@@ -83,16 +83,17 @@ class ObjectDetectorNode(Node):
             det = Detection2D()
             det.header = msg.header
 
-            # Bounding box center and size
-            det.bbox.center.x = float(box.xywh[0][0])
-            det.bbox.center.y = float(box.xywh[0][1])
+            # Bounding box center and size 
+            det.bbox.center.position.x = float(box.xywh[0][0])
+            det.bbox.center.position.y = float(box.xywh[0][1])
+            det.bbox.center.theta = 0.0  # No rotation
             det.bbox.size_x = float(box.xywh[0][2])
             det.bbox.size_y = float(box.xywh[0][3])
 
             # Class and confidence
             hypothesis = ObjectHypothesisWithPose()
-            hypothesis.id = int(box.cls[0])
-            hypothesis.score = float(box.conf[0])
+            hypothesis.hypothesis.class_id = str(int(box.cls[0]))
+            hypothesis.hypothesis.score = float(box.conf[0])
             det.results.append(hypothesis)
 
             detection_array_msg.detections.append(det)

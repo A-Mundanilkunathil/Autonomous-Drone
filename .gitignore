@@ -4,3 +4,4 @@ calibration_images/
 .DS_Store
 venv/ 
 *.pt
+.vscode/
