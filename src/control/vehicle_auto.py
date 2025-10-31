@@ -101,7 +101,7 @@ class VehicleAuto(VehicleMotion):
         end = time.time() + timeout
         while time.time() < end:
             gpi = self.recv_msg('GLOBAL_POSITION_INT', timeout=0.3)
-            if gpi and gpi.relative_alt >= target_alt * 1000 * 0.95:
+            if gpi and gpi.relative_alt >= (target_alt - 0.5) * 1000 * 0.95:
                 log.info("Takeoff complete")
                 return
         raise RuntimeError("Takeoff timeout")
@@ -171,6 +171,23 @@ class VehicleAuto(VehicleMotion):
     def move_diagonal_back_left(self, speed=1.0, duration=2.0, rate_hz=10):
         self._stream_velocity_body(-speed,-speed,0.0, 0.0, duration, rate_hz)
 
+    def move_diagonal_front_right_up(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, speed, -speed, 0.0, duration, rate_hz)
+    def move_diagonal_front_right_down(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, speed, speed, 0.0, duration, rate_hz)
+    def move_diagonal_front_left_up(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, -speed, -speed, 0.0, duration, rate_hz)
+    def move_diagonal_front_left_down(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(speed, -speed, speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_right_up(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, speed, -speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_right_down(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, speed, speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_left_up(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, -speed, -speed, 0.0, duration, rate_hz)
+    def move_diagonal_back_left_down(self, speed=0.5, duration=2.0, rate_hz=10):
+        self._stream_velocity_body(-speed, -speed, speed, 0.0, duration, rate_hz)   
+        
     # TODO: Movements with rotation
     def turn_right(self):
         self.rotate(35, 2.0, 10)

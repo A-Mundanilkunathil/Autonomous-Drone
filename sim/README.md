@@ -5,7 +5,7 @@ gz sim -v4 ~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds/iris_runway.sd
 
 **Run ArduPilot SITL**
 ```bash
-cd ardupilot
+cd sim/ardupilot
 Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON
 ```
 
