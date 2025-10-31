@@ -209,41 +209,79 @@ class AutonomousDroneNode(Node):
             time.sleep(dt)
 
     # ------------------------- High-level missions -------------------------
+    
+    
+
+    # ------------------------- Low-level missions --------------------------
+    # Basic movements in body frame (FLU)
     def move_forward(self, speed: float, duration: float):
         """Move forward in body frame"""
         self.get_logger().info(f'Moving forward at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=speed, vy=0.0, vz=0.0, duration=duration)
-        
     def move_backward(self, speed: float, duration: float):
         """Move backward in body frame"""
         self.get_logger().info(f'Moving backward at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=-speed, vy=0.0, vz=0.0, duration=duration)
-        
     def move_right(self, speed: float, duration: float):
         """Move right in body frame"""
         self.get_logger().info(f'Moving right at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=-speed, vz=0.0, duration=duration)
-        
     def move_left(self, speed: float, duration: float):
         """Move left in body frame"""
         self.get_logger().info(f'Moving left at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=speed, vz=0.0, duration=duration)
-        
     def move_up(self, speed: float, duration: float):
         """Move up in body frame (FLU: negative Z is up)"""
         self.get_logger().info(f'Moving up at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=-speed, duration=duration)
-        
     def move_down(self, speed: float, duration: float):
         """Move down in body frame (FLU: positive Z is down)"""
         self.get_logger().info(f'Moving down at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=speed, duration=duration)
-        
+
+    # Diagonal movements
+    def move_diagonal_front_right(self, speed: float=1.0, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal front right at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=+speed, vy=-speed, vz=0.0, duration=duration, yaw_rate=0.0)
+    def move_diagonal_front_left(self, speed: float=1.0, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal front left at {speed}m/s for {duration}s') 
+        self.move_body_velocity(vx=+speed, vy=+speed, vz=0.0, duration=duration, yaw_rate=0.0)
+    def move_diagonal_back_right(self, speed: float=1.0, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal back right at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=-speed, vz=0.0, duration=duration, yaw_rate=0.0)
+    def move_diagonal_back_left(self, speed: float=1.0, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal back left at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=+speed, vz=0.0, duration=duration, yaw_rate=0.0)
+    def move_diagonal_front_right_up(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal front right up at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=+speed, vy=-speed, vz=-speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_front_right_down(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal front right down at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=+speed, vy=-speed, vz=+speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_front_left_up(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal front left up at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=+speed, vy=+speed, vz=-speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_front_left_down(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal front left down at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=+speed, vy=+speed, vz=+speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_back_right_up(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal back right up at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=-speed, vz=-speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_back_right_down(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal back right down at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=-speed, vz=+speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_back_left_up(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal back left up at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=+speed, vz=-speed, duration=duration, yaw_rate=0.0)
+    def move_diagonal_back_left_down(self, speed: float=0.5, duration: float=2.0):
+        self.get_logger().info(f'Moving diagonal back left down at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=-speed, vy=+speed, vz=+speed, duration=duration, yaw_rate=0.0)
+
+    # Rotation movements
     def rotate_left(self, yaw_rate: float, duration: float):
         """Rotate left (counter-clockwise)"""
         self.get_logger().info(f'Rotating left at {yaw_rate}°/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=0.0, duration=duration, yaw_rate=yaw_rate)
-        
     def rotate_right(self, yaw_rate: float, duration: float):
         """Rotate right (clockwise)"""
         self.get_logger().info(f'Rotating right at {yaw_rate}°/s for {duration}s')
@@ -251,7 +289,6 @@ class AutonomousDroneNode(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-
     node = AutonomousDroneNode()
 
     try:

@@ -8,7 +8,8 @@ from vehicle_auto import VehicleAuto
 from session import MavSession
 
 # Connect to SITL 
-CONNECTION = 'udp:127.0.0.1:14550' # /dev/ttyUSB1
+CONNECTION = 'udp:127.0.0.1:14550' # /dev/tty.usbserial-0001
+# sess = MavSession(port="/dev/tty.usbserial-0001", baud=57600).connect()
 
 def main():
     logging.basicConfig(
