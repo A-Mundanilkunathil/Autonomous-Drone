@@ -155,7 +155,7 @@ class AutonomousDroneNode(Node):
         import time
         
         # Wait for drone to land (altitude near 0)
-        ground_threshold = 0.2  # Consider landed if below 20cm
+        ground_threshold = 0.4  # Consider landed if below 40cm
         start_time = time.time()
         landed = False
         
@@ -190,18 +190,13 @@ class AutonomousDroneNode(Node):
     def hover(self, duration: float = 5.0):
         """
         Hover in place for specified duration
-        
-        Sends zero velocity commands to maintain position
-        
-        Args:
-            duration: How long to hover (seconds)
         """
         import time
+
+        self.get_logger().info(f'Hovering for {duration}s...')
+        end_time = time.time() + duration
         rate_hz = 10
         dt = 1.0 / rate_hz
-        end_time = time.time() + duration
-        
-        self.get_logger().info(f'Hovering for {duration}s')
 
         while time.time() < end_time:
             # Send zero velocity to hold position
@@ -209,9 +204,57 @@ class AutonomousDroneNode(Node):
             time.sleep(dt)
 
     # ------------------------- High-level missions -------------------------
-    
-    
+    def move_circle_global(self, radius: float = 5.0, speed: float = 1.0, duration: float = 60.0):
+        """
+        Move in a circular pattern in the GLOBAL frame (ENU)
+        
+        Args:
+            radius: Circle radius (meters)
+            speed: Tangential speed (m/s)
+            duration: Total duration to circle (seconds)
+            update_interval: Time between position updates (seconds)
+        
+        Usage: node.move_circle_global(radius=5.0, speed=1.0, duration=60.0)
+        """
+        import math 
 
+        center_pos = self.mavros_subs.get_position()  # (x, y, z)
+        center_x, center_y, center_z = center_pos
+
+        rate_hz = 10
+        dt = 1.0 / rate_hz
+        total_steps = int(duration / dt)
+        angle_step = (speed / radius) * dt  # radians per step
+
+        for step in range(total_steps):
+            angle = step * angle_step
+            target_x = center_x + radius * math.cos(angle)
+            target_y = center_y + radius * math.sin(angle)
+            target_z = center_z  # Maintain current altitude
+
+            self.goto_position(target_x, target_y, target_z, duration=dt)
+
+    def move_square(self, speed: float = 1.0, leg_s: float = 3.0):
+        """
+        Move square in WORLD frame (ENU)
+        Args:
+            speed: Speed in m/s
+            leg_s: Time to move each leg in seconds
+        """
+        pos = self.mavros_subs.get_position()  # (x, y, z)
+        x_0, y_0, z_0 = pos
+        distance = speed * leg_s if speed and leg_s else 3.0
+
+        corners = [
+            (x_0 + distance, y_0, z_0),
+            (x_0 + distance, y_0 + distance, z_0),
+            (x_0, y_0 + distance, z_0),
+            (x_0, y_0, z_0)
+        ]
+
+        for corner in corners:
+            self.goto_position(corner[0], corner[1], corner[2], duration=leg_s)
+    
     # ------------------------- Low-level missions --------------------------
     # Basic movements in body frame (FLU)
     def move_forward(self, speed: float, duration: float):
@@ -306,24 +349,30 @@ def main(args=None):
             # Hover briefly
             node.hover(3.0)
 
-            # Test forward/backward
-            node.move_forward(speed=1.0, duration=3.0)
-            node.hover(2.0)
-            node.move_backward(speed=1.0, duration=3.0)
-            node.hover(2.0)
+            # # Test forward/backward
+            # node.move_forward(speed=1.0, duration=3.0)
+            # node.hover(2.0)
+            # node.move_backward(speed=1.0, duration=3.0)
+            # node.hover(2.0)
 
-            # Test left/right
-            node.move_right(speed=1.0, duration=3.0)
-            node.hover(2.0)
-            node.move_left(speed=1.0, duration=3.0)
-            node.hover(2.0)
+            # # Test left/right
+            # node.move_right(speed=1.0, duration=3.0)
+            # node.hover(2.0)
+            # node.move_left(speed=1.0, duration=3.0)
+            # node.hover(2.0)
 
-            # Test rotation
-            node.rotate_right(yaw_rate=30.0, duration=3.0)  # ~90° turn
-            node.hover(2.0)
-            node.rotate_left(yaw_rate=30.0, duration=3.0)   # Turn back
-            node.hover(2.0)
+            # # Test rotation
+            # node.rotate_right(yaw_rate=30.0, duration=3.0)  # ~90° turn
+            # node.hover(2.0)
+            # node.rotate_left(yaw_rate=30.0, duration=3.0)   # Turn back
+            # node.hover(2.0)
             
+            # # Test circle movement
+            # node.move_circle_global(radius=5.0, speed=1.0, duration=30.0)
+            
+            # Test square movement
+            node.move_square(speed=1.0, leg_s=3.0)
+
             # Land
             node.land()
             node.get_logger().info('Mission complete!')

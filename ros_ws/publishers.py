@@ -36,7 +36,7 @@ class MavrosPublishers:
 
     def publish_position(self, x: float, y: float, z: float):
         """
-        Send position setpoint in NED frame (North-East-Down)
+        Send position setpoint in ENU frame (East-North-Up)
         
         Why: Tell drone "go to this position"
         When: Use for waypoint navigation
@@ -44,9 +44,9 @@ class MavrosPublishers:
         msg = PoseStamped()
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.header.frame_id = 'map'
-        msg.pose.position.x = x # North (meters)
-        msg.pose.position.y = y # East (meters)
-        msg.pose.position.z = z # Down (negative = up)
+        msg.pose.position.x = x # East (meters)
+        msg.pose.position.y = y # North (meters)
+        msg.pose.position.z = z # Up (meters)
         self.local_pos_pub.publish(msg)
     
     def publish_velocity_body(self, vx: float, vy: float, vz: float, yaw_rate: float = 0.0):
