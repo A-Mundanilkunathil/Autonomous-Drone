@@ -115,7 +115,7 @@ class VehicleAuto(VehicleMotion):
         # Wait for altitude to be reached
         # GLOBAL_POSITION_INT.relative_alt is in millimeters
         target_alt_mm = target_alt * 1000.0
-        threshold_mm = target_alt_mm * 0.95  # Accept 95% of target
+        threshold_mm = target_alt_mm * 0.8  # Accept 80% of target
         
         end = time.time() + timeout
         while time.time() < end:
@@ -167,7 +167,7 @@ class VehicleAuto(VehicleMotion):
                 # If altitude < 0.5m and vertical speed < 0.2m/s
                 if rel_alt_m <= 0.5 and abs(vz_mps) < 0.2:
                     log.info("Landing complete (alt + speed)")
-                    time.sleep(2.0) # Wait for land to complete
+                    time.sleep(4.0) # Wait for land to complete
                     return
         raise RuntimeError("Landing timeout")
 
@@ -227,7 +227,7 @@ class VehicleAuto(VehicleMotion):
         self.rotate(-45, 2.0, 10)
     def turn_around(self):
         self.rotate(180, 2.0, 10)
-        
+
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')

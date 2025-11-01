@@ -8,7 +8,7 @@ from vehicle_auto import VehicleAuto
 from session import MavSession
 
 # Connect to SITL 
-# CONNECTION = 'udp:127.0.0.1:14550' 
+CONNECTION = 'udp:127.0.0.1:14550' 
 # sess = MavSession(port="/dev/tty.usbserial-0001", baud=57600).connect()
 
 def main():
@@ -16,7 +16,7 @@ def main():
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"             
     )
-    sess = MavSession(port="/dev/tty.usbserial-0001", baud=57600).connect()
+    sess = MavSession(CONNECTION).connect()
     auto = VehicleAuto(sess)
 
     # Hearbeat & Arm 
@@ -25,7 +25,7 @@ def main():
     
     try:
         auto.disable_arm_check() # Disable arming check
-        auto.guided_takeoff(1.0) # Takeoff to 1m
+        auto.guided_takeoff(2.0) # Takeoff to 1m
         time.sleep(2.0)
         
         # # Turn left
@@ -100,13 +100,14 @@ def main():
         # # Move diagonal back left
         # auto.move_diagonal_back_left(speed=0.5, duration=3.0, rate_hz=10)
 
-        # # Move circle
+        # Move circle
         # auto.move_circle_global(radius=6.0, speed=1.0, duration=60, update_interval=0.1)
 
-        # # Move square
-        # auto.move_square(speed=2.0, leg_s=3.0, rate_hz=10)
+        # Move square
+        auto.move_square(speed=2.0, leg_s=3.0, rate_hz=10)
 
         # Land then disarm
+        auto.hold_position()
         auto.land()
 
     except KeyboardInterrupt:
