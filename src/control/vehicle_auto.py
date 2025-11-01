@@ -47,11 +47,15 @@ class VehicleAuto(VehicleMotion):
         :param timeout: time limit in seconds
         :return: None
         """
+        log.info(f"goto_latlon: target ({lat_deg:.7f}, {lon_deg:.7f}, {alt_rel_m:.2f}m)")
+        
         # Guided mode
         self.set_mode("GUIDED")
         
         dt = 1.0 / max(1.0, rate_hz)
         end = time.time() + timeout
+        last_log_time = 0
+        
         while time.time() < end:
             # Stream target position
             self.send_position_target_global(lat_deg, lon_deg, alt_rel_m)
@@ -66,13 +70,21 @@ class VehicleAuto(VehicleMotion):
                 # Check if we've reached the target
                 dist_xy = self._meters_between(cur_lat, cur_lon, lat_deg, lon_deg)
                 alt_err = abs(cur_alt - alt_rel_m)
+                
+                # Log progress every 2 seconds
+                now = time.time()
+                if now - last_log_time >= 2.0:
+                    log.info(f"goto_latlon: distance = {dist_xy:.2f}m, alt_err = {alt_err:.2f}m")
+                    last_log_time = now
 
                 if dist_xy < pos_tol_m and alt_err < alt_tol_m:
+                    log.info(f"goto_latlon: reached target (dist={dist_xy:.2f}m, alt_err={alt_err:.2f}m)")
                     return
                 
             time.sleep(dt)
 
         self.hold_position()
+        log.warn(f"goto_latlon: timeout after {timeout}s")
         raise RuntimeError("goto_latlon timeout")
 
     def guided_takeoff(self, target_alt: float, wait: bool=True, timeout: float=30.0) -> None:
@@ -88,6 +100,7 @@ class VehicleAuto(VehicleMotion):
         :param timeout: time limit in seconds
         :return: None
         """
+        log.info(f"Takeoff command: target altitude = {target_alt:.2f} m")
         self.set_mode("GUIDED")
         self.arm()
         self.conn.mav.command_long_send(
@@ -98,12 +111,27 @@ class VehicleAuto(VehicleMotion):
         self.wait_command_ack(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 3.0)
         if not wait:
             return
+        
+        # Wait for altitude to be reached
+        # GLOBAL_POSITION_INT.relative_alt is in millimeters
+        target_alt_mm = target_alt * 1000.0
+        threshold_mm = target_alt_mm * 0.95  # Accept 95% of target
+        
         end = time.time() + timeout
         while time.time() < end:
             gpi = self.recv_msg('GLOBAL_POSITION_INT', timeout=0.3)
-            if gpi and gpi.relative_alt >= (target_alt - 0.5) * 1000 * 0.95:
-                log.info("Takeoff complete")
-                return
+            if gpi:
+                current_alt_mm = gpi.relative_alt
+                current_alt_m = current_alt_mm / 1000.0
+                
+                log.info(f"Takeoff: current altitude = {current_alt_m:.2f} m (target {target_alt:.2f} m)")
+                
+                if current_alt_mm >= threshold_mm:
+                    log.info(f"Takeoff complete: reached {current_alt_m:.2f} m")
+                    return
+            
+            time.sleep(0.1)
+        
         raise RuntimeError("Takeoff timeout")
 
     def land(self, wait: bool=True, timeout: float=60.0) -> None:
@@ -171,36 +199,6 @@ class VehicleAuto(VehicleMotion):
     def move_diagonal_back_left(self, speed=1.0, duration=2.0, rate_hz=10):
         self._stream_velocity_body(-speed,-speed,0.0, 0.0, duration, rate_hz)
 
-    def move_diagonal_front_right_up(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(speed, speed, -speed, 0.0, duration, rate_hz)
-    def move_diagonal_front_right_down(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(speed, speed, speed, 0.0, duration, rate_hz)
-    def move_diagonal_front_left_up(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(speed, -speed, -speed, 0.0, duration, rate_hz)
-    def move_diagonal_front_left_down(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(speed, -speed, speed, 0.0, duration, rate_hz)
-    def move_diagonal_back_right_up(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(-speed, speed, -speed, 0.0, duration, rate_hz)
-    def move_diagonal_back_right_down(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(-speed, speed, speed, 0.0, duration, rate_hz)
-    def move_diagonal_back_left_up(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(-speed, -speed, -speed, 0.0, duration, rate_hz)
-    def move_diagonal_back_left_down(self, speed=0.5, duration=2.0, rate_hz=10):
-        self._stream_velocity_body(-speed, -speed, speed, 0.0, duration, rate_hz)   
-        
-    # TODO: Movements with rotation
-    def turn_right(self):
-        self.rotate(35, 2.0, 10)
-    def turn_right_diagonal(self):
-        self.rotate(45, 2.0, 10)
-    def turn_left(self):
-        self.rotate(-35, 2.0, 10)
-    def turn_left_diagonal(self):
-        self.rotate(-45, 2.0, 10)
-    def turn_around(self):
-        self.rotate(180, 2.0, 10)
-
-    # TODO: add CW and CCW parameters
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
@@ -210,7 +208,6 @@ class VehicleAuto(VehicleMotion):
         self.move_left(speed,    leg_s, rate_hz)
         self.hold_position()
 
-    # TODO: add CW and CCW parameters
     def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
