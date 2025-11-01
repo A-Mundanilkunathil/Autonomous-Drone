@@ -229,13 +229,81 @@ class VehicleAuto(VehicleMotion):
         self.rotate(180, 2.0, 10)
 
     def move_square(self, speed=1.0, leg_s=3.0, rate_hz=10):
+        """
+        Move in a square pattern using world-frame position control.
+        
+        Uses LOCAL_NED position setpoints for precise square geometry
+        regardless of heading drift.
+        
+        :param speed: not used (position control)
+        :param leg_s: duration of each leg in seconds (used to calculate distance)
+        :param rate_hz: command rate in Hz
+        """
         if self.get_mode() != 'GUIDED':
             self.set_mode('GUIDED')
-        self.move_forward(speed, leg_s, rate_hz)
-        self.move_right(speed,   leg_s, rate_hz)
-        self.move_backward(speed,leg_s, rate_hz)
-        self.move_left(speed,    leg_s, rate_hz)
+        
+        # Calculate distance per leg (distance = speed * time)
+        distance = speed * leg_s if speed and leg_s else 3.0
+        
+        log.info(f"Move square (world frame): distance={distance:.1f}m per side")
+        
+        # Get current position
+        pos = self.recv_msg('LOCAL_POSITION_NED', timeout=0.5)
+        if not pos:
+            raise RuntimeError("Could not get LOCAL_POSITION_NED - cannot execute square")
+        
+        x0, y0, z0 = pos.x, pos.y, pos.z
+        log.info(f"Starting position: ({x0:.2f}, {y0:.2f}, {z0:.2f})")
+        
+        # Define square corners in NED frame (North, East, Down)
+        corners = [
+            (x0 + distance, y0, z0),              # Leg 1: North (forward)
+            (x0 + distance, y0 + distance, z0),   # Leg 2: East (right)
+            (x0, y0 + distance, z0),              # Leg 3: South (back)
+            (x0, y0, z0),                         # Leg 4: West (left) - back to start
+        ]
+        
+        # Move to each corner
+        for i, (tx, ty, tz) in enumerate(corners, 1):
+            log.info(f"Square leg {i}: moving to ({tx:.2f}, {ty:.2f}, {tz:.2f})")
+            self._goto_position_local(tx, ty, tz, tolerance=0.8, rate_hz=rate_hz, timeout=30.0)
+        
+        log.info("Square complete")
         self.hold_position()
+    
+    def _goto_position_local(self, x, y, z, tolerance=0.5, rate_hz=10, timeout=30.0):
+        """
+        Go to a local NED position using position setpoints.
+        
+        :param x: target x (North) in meters
+        :param y: target y (East) in meters  
+        :param z: target z (Down) in meters
+        :param tolerance: position tolerance in meters
+        :param rate_hz: command rate in Hz
+        :param timeout: timeout in seconds
+        """
+        dt = 1.0 / max(1.0, rate_hz)
+        end = time.time() + timeout
+        
+        while time.time() < end:
+            # Send position setpoint
+            self.send_position_setpoint(x, y, z)
+            
+            # Check current position
+            pos = self.recv_msg('LOCAL_POSITION_NED', timeout=0.2)
+            if pos:
+                dx = x - pos.x
+                dy = y - pos.y
+                dz = z - pos.z
+                dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                
+                if dist < tolerance:
+                    log.info(f"Reached position ({x:.2f}, {y:.2f}, {z:.2f})")
+                    return
+            
+            time.sleep(dt)
+        
+        log.warning(f"Position timeout - target ({x:.2f}, {y:.2f}, {z:.2f})")
 
     def move_circle_global(self, radius=5.0, speed=1.0, duration=20, update_interval=0.1):
         if self.get_mode() != 'GUIDED':
