@@ -54,7 +54,7 @@ class MavrosSubscribers:
         # Subscribe to GPS
         self.gps_sub = node.create_subscription(
             NavSatFix,
-            'mavros/global_position/global',
+            '/mavros/global_position/global',
             self._gps_callback,
             qos_profile
         )

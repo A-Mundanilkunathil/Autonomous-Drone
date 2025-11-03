@@ -166,6 +166,8 @@ class AutonomousDroneNode(Node):
         self.get_logger().info(f"Going to GPS: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)")
 
         while (time.time() - start) < timeout_s:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
             # Get current position
             curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
             curr_alt = self.mavros_subs.get_relative_altitude()
@@ -188,7 +190,7 @@ class AutonomousDroneNode(Node):
             self.get_logger().info(
                 f"Distance to target: {distance:.2f} m | "
                 f"Alt: {abs(curr_alt):.2f}m / {abs(target_alt):.2f}m | "
-                f"Alt error: {alt_error:.2f} m"
+                f"Alt error: {abs(alt_error):.2f} m"
             )
 
             # Check if target reached (horizontal AND altitude)
@@ -198,7 +200,7 @@ class AutonomousDroneNode(Node):
 
             time.sleep(dt)
             
-    def land(self, timeout: float = 30.0) -> bool:
+    def land(self, timeout: float = 60.0) -> bool:
         """
         Command the drone to land and wait until on ground
         
