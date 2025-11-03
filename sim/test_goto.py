@@ -26,8 +26,8 @@ def main():
     sess.start_pump()
 
     try:
-        # Takeoff to 2 meters
-        auto.guided_takeoff(2.0)
+        # Takeoff to 3 meters
+        auto.guided_takeoff(3.0)
         
         # Wait a moment for stabilization
         time.sleep(2.0)
@@ -42,12 +42,12 @@ def main():
         
         print(f"Current position: lat={cur_lat:.7f}, lon={cur_lon:.7f}, alt={cur_alt:.2f}m")
 
-        # Target: 10m north, 3m east, SAME altitude (4m to match takeoff)
+        # Target: 10m north, 3m east
         tgt_lat, tgt_lon = offset_latlon(cur_lat, cur_lon, d_north_m=-10.0, d_east_m=3.0)
-        print(f"Target position:  lat={tgt_lat:.7f}, lon={tgt_lon:.7f}, alt=4.00m")
+        print(f"Target position:  lat={tgt_lat:.7f}, lon={tgt_lon:.7f}, alt={cur_alt:.2f}m")
         
-        # Go to target at current altitude (4m, not 5m)
-        auto.goto_latlon(tgt_lat, tgt_lon, alt_rel_m=4.0, pos_tol_m=1.5, alt_tol_m=0.7, rate_hz=5)
+        # Go to target at current altitude 
+        auto.goto_latlon(tgt_lat, tgt_lon, alt_rel_m=cur_alt, pos_tol_m=1.5, alt_tol_m=0.7, rate_hz=5)
 
         print("Waypoint reached! Holding position...")
         auto.hold_position()

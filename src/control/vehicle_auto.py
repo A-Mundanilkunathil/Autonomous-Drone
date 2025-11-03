@@ -167,7 +167,7 @@ class VehicleAuto(VehicleMotion):
                 # If altitude < 0.5m and vertical speed < 0.2m/s
                 if rel_alt_m <= 0.5 and abs(vz_mps) < 0.2:
                     log.info("Landing complete (alt + speed)")
-                    time.sleep(4.0) # Wait for land to complete
+                    time.sleep(5.0) # Wait for land to complete
                     return
         raise RuntimeError("Landing timeout")
 

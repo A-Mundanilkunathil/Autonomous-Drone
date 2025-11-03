@@ -151,7 +151,7 @@ class AutonomousDroneNode(Node):
 
     def goto_gps(self, target_lat, target_lon, target_alt, timeout_s=90.0):
         """
-        Go to GPS coordinates and wait until reached
+        Go to GPS coordinates maintaining altitude, then land vertically
         Args:
             target_lat: Target latitude (degrees)
             target_lon: Target longitude (degrees)
@@ -166,26 +166,33 @@ class AutonomousDroneNode(Node):
         self.get_logger().info(f"Going to GPS: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)")
 
         while (time.time() - start) < timeout_s:
-            # Publish GPS target with relative altitude
+            # Get current position
+            curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
+            curr_alt = self.mavros_subs.get_relative_altitude()
+
+            # Compute horizontal distance to target
+            distance = self._haversine_distance(
+                curr_lat, curr_lon, target_lat, target_lon
+            )
+            
+            # Compute altitude error
+            alt_error = target_alt - curr_alt
+            
             self.mavros_pubs.publish_global_position(
                 latitude=target_lat,
                 longitude=target_lon,
                 altitude_m=target_alt,
-                relative_alt=True  # Explicitly set to use relative altitude
+                relative_alt=True
             )
 
-            # Read current position
-            curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
-            curr_alt = self.mavros_subs.get_relative_altitude()  # Use relative altitude!
-
-            # Compute distance to target
-            distance = self._haversine_distance(
-                curr_lat, curr_lon, target_lat, target_lon
+            self.get_logger().info(
+                f"Distance to target: {distance:.2f} m | "
+                f"Alt: {abs(curr_alt):.2f}m / {abs(target_alt):.2f}m | "
+                f"Alt error: {alt_error:.2f} m"
             )
 
-            self.get_logger().info(f"Distance to target: {distance:.2f} m | Alt: {curr_alt:.2f}m / {target_alt:.2f}m | Alt diff: {abs(target_alt - curr_alt):.2f} m")
-
-            if distance < 1.5 and abs(target_alt - curr_alt) < 0.8:
+            # Check if target reached (horizontal AND altitude)
+            if distance < 1.5 and abs(alt_error) < 0.8:
                 self.get_logger().info("Target reached!")
                 break
 
@@ -236,7 +243,7 @@ class AutonomousDroneNode(Node):
             self.get_logger().info('Landed successfully')
             
             # Wait a moment, then disarm
-            time.sleep(4.0)
+            time.sleep(5.0)
             self.mavros_srvs.arm(False)
             return True
         else:
@@ -457,14 +464,15 @@ def main(args=None):
             node.get_logger().info(f'Current position: Lat {curr_lat:.6f}, Lon {curr_lon:.6f}')
             node.get_logger().info(f'Current altitude: {curr_alt_rel:.1f}m (relative), {curr_alt_amsl:.1f}m (AMSL)')
             
-            target_lat = curr_lat + 0.0001  # ~11m north
-            target_lon = curr_lon + 0.0001  # ~8.5m east
+            target_lat = curr_lat - 0.0001  # ~11m north
+            target_lon = curr_lon - 0.0001  # ~8.5m east
             target_alt = curr_alt_rel  
             
             node.get_logger().info(f'Target: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)')
             node.goto_gps(target_lat, target_lon, target_alt, timeout_s=60.0)
 
             # Land
+            node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0)
             node.land()
             node.get_logger().info('Mission complete!')
         else:
