@@ -4,7 +4,6 @@ from publishers import MavrosPublishers
 from subscribers import MavrosSubscribers
 from services import MavrosServices
 
-
 class AutonomousDroneNode(Node):
     def __init__(self):
         super().__init__('autonomous_drone_node')
@@ -135,6 +134,51 @@ class AutonomousDroneNode(Node):
             self.mavros_pubs.publish_position(x, y, z)
             time.sleep(dt)
     
+    def _haversine_distance(self, lat1, lon1, lat2, lon2):
+        import math
+
+        R = 6371000 # Earth radius in meters
+        d_lat = math.radians(lat2 - lat1)
+        d_lon = math.radians(lon2 - lon1)
+        a = (
+            math.sin(d_lat / 2)**2 + 
+            math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * 
+            math.sin(d_lon / 2)**2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        distance = R * c # Distance in meters
+        return distance
+
+    def goto_gps(self, target_lat, target_lon, target_alt, timeout_s=90.0):
+        import time
+        rate_hz = 10
+        dt = 1.0 / rate_hz
+        start = time.time()
+
+        while (time.time() - start) < timeout_s:
+            # Publish GPS target
+            self.mavros_pubs.publish_global_position(
+                latitude=target_lat,
+                longitude=target_lon,
+                altitude_m=target_alt
+            )
+
+            # Read current position
+            curr_lat, curr_lon, curr_alt = self.mavros_subs.get_position()
+
+            # Compute distance to target
+            distance = self._haversine_distance(
+                curr_lat, curr_lon, target_lat, target_lon
+            )
+
+            self.get_logger().info(f"Distance to target: {distance:.2f} m | Alt diff: {abs(target_alt - curr_alt):.2f} m")
+
+            if distance < 1.5 and abs(target_alt - curr_alt) < 0.8:
+                self.get_logger().info("Target reached!")
+                break
+
+            time.sleep(dt)
+            
     def land(self, timeout: float = 30.0) -> bool:
         """
         Command the drone to land and wait until on ground

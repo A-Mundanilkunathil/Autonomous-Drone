@@ -5,6 +5,7 @@ import rclpy
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import PositionTarget
+from mavros_msgs.msg import GlobalPositionTarget
 import math
 
 class MavrosPublishers:
@@ -29,6 +30,13 @@ class MavrosPublishers:
         self.position_target_pub = node.create_publisher(
             PositionTarget,
             '/mavros/setpoint_raw/local', # MAVROS topic for raw local setpoints
+            10 # QoS history depth
+        )
+
+        # Raw position/velocity targets - advanced control
+        self.position_target_global_pub = node.create_publisher(
+            GlobalPositionTarget,
+            '/mavros/setpoint_raw/global', # MAVROS topic for raw global setpoints
             10 # QoS history depth
         )
 
@@ -97,3 +105,68 @@ class MavrosPublishers:
         msg.velocity.y = vy
         msg.velocity.z = vz
         self.position_target_pub.publish(msg)
+
+    def publish_global_position(
+        self,
+        latitude: float,
+        longitude: float,
+        altitude_m: float,
+        *,
+        yaw_deg: float | None = None,
+        yaw_rate_deg_s: float | None = None,
+        relative_alt: bool = True
+    ):
+        """
+        Command a GPS (global) position target.
+
+        Args:
+            latitude:  degrees (WGS84)
+            longitude: degrees (WGS84)
+            altitude_m: meters (AMSL if relative_alt=False, else REL_ALT from home)
+            yaw_deg: optional yaw command in degrees (0..360, NED, positive CCW)
+            yaw_rate_deg_s: optional yaw rate in deg/s (ignored if yaw given)
+            relative_alt: True -> MAV_FRAME_GLOBAL_REL_ALT, False -> MAV_FRAME_GLOBAL_INT (AMSL)
+        """
+        msg = GlobalPositionTarget()
+        msg.header.stamp = self.node.get_clock().now().to_msg()
+        
+        # Coordinate frame
+        msg.coordinate_frame = (
+            GlobalPositionTarget.FRAME_GLOBAL_REL_ALT
+            if relative_alt else
+            GlobalPositionTarget.FRAME_GLOBAL_INT
+        )
+
+        # Use position only
+        type_mask = (
+            GlobalPositionTarget.IGNORE_VX |
+            GlobalPositionTarget.IGNORE_VY |
+            GlobalPositionTarget.IGNORE_VZ |
+            GlobalPositionTarget.IGNORE_AFX |
+            GlobalPositionTarget.IGNORE_AFY |
+            GlobalPositionTarget.IGNORE_AFZ
+        )
+
+        if yaw_deg is None and yaw_rate_deg_s is None:
+            # Ignore both yaw and yaw rate
+            type_mask |= (
+                GlobalPositionTarget.IGNORE_YAW |
+                GlobalPositionTarget.IGNORE_YAW_RATE
+            )
+        elif yaw_deg is not None:
+            # Set yaw, ignore yaw rate
+            msg.yaw = math.radians(yaw_deg)
+            type_mask |= GlobalPositionTarget.IGNORE_YAW_RATE
+        else:
+            # Set yaw rate, ignore yaw
+            msg.yaw_rate = math.radians(yaw_rate_deg_s)
+            type_mask |= GlobalPositionTarget.IGNORE_YAW
+
+        msg.type_mask = type_mask
+
+        # Target position
+        msg.latitude = float(latitude)
+        msg.longitude = float(longitude)
+        msg.altitude = float(altitude_m)
+
+        self.position_target_global_pub.publish(msg)

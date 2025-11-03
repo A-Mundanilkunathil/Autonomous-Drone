@@ -16,6 +16,7 @@ class MavrosSubscribers:
         self.current_state = None
         self.local_position = None
         self.velocity = None
+        self.gps_fix = None
 
         # QoS profile
         qos_profile = QoSProfile(
@@ -49,6 +50,14 @@ class MavrosSubscribers:
             qos_profile  
         )
 
+        # Subscribe to GPS
+        self.gps_sub = node.create_subscription(
+            NavSatFix,
+            'mavros/global_position/global',
+            self._gps_callback,
+            qos_profile
+        )
+
         node.get_logger().info('MAVROS Subscribers initialized.')
 
     def _state_callback(self, msg: State):
@@ -78,6 +87,10 @@ class MavrosSubscribers:
         """Velocity updates (NED frame)"""
         self.velocity = msg
 
+    def _gps_callback(self, msg: NavSatFix):
+        """Receives GPS fix"""
+        self.gps_fix = msg
+
     # Helper methods to get latest data
     def is_armed(self) -> bool:
         return self.current_state.armed if self.current_state else False
@@ -98,4 +111,13 @@ class MavrosSubscribers:
         if self.velocity:
             vel = self.velocity.twist.linear
             return (vel.x, vel.y, vel.z)
+        return (0.0, 0.0, 0.0)
+    
+    def get_global_position(self) -> tuple:
+        if self.gps_fix:
+            return (
+                self.gps_fix.latitude,
+                self.gps_fix.longitude,
+                self.gps_fix.altitude
+            )
         return (0.0, 0.0, 0.0)
