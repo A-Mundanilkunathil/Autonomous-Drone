@@ -6,7 +6,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import NavSatFix, Imu
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from mavros_msgs.msg import State
+from mavros_msgs.msg import State, HomePosition
 
 class MavrosSubscribers:
     def __init__(self, node: Node):
@@ -17,6 +17,7 @@ class MavrosSubscribers:
         self.local_position = None
         self.velocity = None
         self.gps_fix = None
+        self.home = None
 
         # QoS profile
         qos_profile = QoSProfile(
@@ -58,6 +59,14 @@ class MavrosSubscribers:
             qos_profile
         )
 
+        # Subscribe to home position
+        self.home_sub = node.create_subscription(
+            HomePosition,
+            '/mavros/home_position/home',
+            self._home_callback,
+            qos_profile
+        )
+
         node.get_logger().info('MAVROS Subscribers initialized.')
 
     def _state_callback(self, msg: State):
@@ -91,6 +100,10 @@ class MavrosSubscribers:
         """Receives GPS fix"""
         self.gps_fix = msg
 
+    def _home_callback(self, msg: HomePosition):
+        """Receives home position"""
+        self.home = msg
+
     # Helper methods to get latest data
     def is_armed(self) -> bool:
         return self.current_state.armed if self.current_state else False
@@ -114,10 +127,33 @@ class MavrosSubscribers:
         return (0.0, 0.0, 0.0)
     
     def get_global_position(self) -> tuple:
+        """
+        Get current GPS position.
+        Returns: (latitude, longitude, altitude_AMSL)
+        Note: altitude is AMSL (Above Mean Sea Level), not relative to home!
+        """
         if self.gps_fix:
             return (
                 self.gps_fix.latitude,
                 self.gps_fix.longitude,
                 self.gps_fix.altitude
+            )
+        return (0.0, 0.0, 0.0)
+    
+    def get_relative_altitude(self) -> float:
+        """
+        Get current altitude relative to home position.
+        Returns: altitude in meters relative to home
+        """
+        if self.local_position:
+            return -self.local_position.pose.position.z  # NED frame: negative Z is up
+        return 0.0
+    
+    def get_home_position(self) -> tuple:
+        if self.home:
+            return (
+                self.home.geo.latitude,
+                self.home.geo.longitude,
+                self.home.geo.altitude
             )
         return (0.0, 0.0, 0.0)

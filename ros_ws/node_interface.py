@@ -55,7 +55,7 @@ class AutonomousDroneNode(Node):
         
         # Wait for drone to reach altitude (with tolerance)
         target_reached = False
-        altitude_tolerance = 0.5 
+        altitude_tolerance = 0.4 
         start_time = time.time()
         
         while (time.time() - start_time) < timeout:
@@ -150,28 +150,40 @@ class AutonomousDroneNode(Node):
         return distance
 
     def goto_gps(self, target_lat, target_lon, target_alt, timeout_s=90.0):
+        """
+        Go to GPS coordinates and wait until reached
+        Args:
+            target_lat: Target latitude (degrees)
+            target_lon: Target longitude (degrees)
+            target_alt: Target altitude (meters, relative to home)
+            timeout_s: Maximum time to wait (seconds)
+        """
         import time
         rate_hz = 10
         dt = 1.0 / rate_hz
         start = time.time()
+        
+        self.get_logger().info(f"Going to GPS: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)")
 
         while (time.time() - start) < timeout_s:
-            # Publish GPS target
+            # Publish GPS target with relative altitude
             self.mavros_pubs.publish_global_position(
                 latitude=target_lat,
                 longitude=target_lon,
-                altitude_m=target_alt
+                altitude_m=target_alt,
+                relative_alt=True  # Explicitly set to use relative altitude
             )
 
             # Read current position
-            curr_lat, curr_lon, curr_alt = self.mavros_subs.get_position()
+            curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
+            curr_alt = self.mavros_subs.get_relative_altitude()  # Use relative altitude!
 
             # Compute distance to target
             distance = self._haversine_distance(
                 curr_lat, curr_lon, target_lat, target_lon
             )
 
-            self.get_logger().info(f"Distance to target: {distance:.2f} m | Alt diff: {abs(target_alt - curr_alt):.2f} m")
+            self.get_logger().info(f"Distance to target: {distance:.2f} m | Alt: {curr_alt:.2f}m / {target_alt:.2f}m | Alt diff: {abs(target_alt - curr_alt):.2f} m")
 
             if distance < 1.5 and abs(target_alt - curr_alt) < 0.8:
                 self.get_logger().info("Target reached!")
@@ -246,6 +258,50 @@ class AutonomousDroneNode(Node):
             # Send zero velocity to hold position
             self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
             time.sleep(dt)
+    
+    def return_to_launch(self, pos_tol_m: float, alt_tol_m: float, timeout: float = 180.0) -> bool:
+        """
+        Command the drone to return to launch position
+
+        Args:
+            pos_tol_m: Position tolerance in meters
+            alt_tol_m: Altitude tolerance in meters
+            timeout: Maximum time to wait for RTL (seconds)
+
+        Why: Safe return procedure
+        """
+        import time
+        start_time = time.time()
+
+        # Ensure home position is known
+        home = self.mavros_subs.get_home_position()
+        if home is None:
+            self.get_logger().error('Home position unknown, cannot RTL.')
+        else:
+            lat, lon, alt = home
+            self.get_logger().info(f'Home position: Lat {lat}, Lon {lon}, Alt {alt}m')
+
+        # Command RTL
+        if not self.mavros_srvs.set_mode('RTL'):
+            self.get_logger().error('Failed to set RTL mode.')
+            return False
+        
+        self.get_logger().info('Returning to Launch (RTL)...')
+        
+        while (time.time() - start_time) < timeout:
+            rclpy.spin_once(self, timeout_sec=0.1)
+
+            # Check distance to home
+            curr_lat, curr_lon, curr_alt = self.mavros_subs.get_global_position()
+            distance = self._haversine_distance(curr_lat, curr_lon, lat, lon)
+            alt_diff = abs(curr_alt - alt)
+            self.get_logger().info(f'Distance to home: {distance:.2f} m | Alt diff: {alt_diff:.2f} m')
+            if distance < pos_tol_m and alt_diff < alt_tol_m:
+                self.get_logger().info('Reached home position.')
+                return True
+            
+        self.get_logger().warn(f'RTL timeout after {timeout}s.')
+        return False
 
     # ------------------------- High-level missions -------------------------
     def move_circle_global(self, radius: float = 5.0, speed: float = 1.0, duration: float = 60.0):
@@ -388,34 +444,25 @@ def main(args=None):
         
         # Perform simple test mission
         if node.arm_and_takeoff(altitude=5.0):
+            node.mavros_srvs.set_home()
             node.get_logger().info('Takeoff complete!')
             
             # Hover briefly
             node.hover(3.0)
 
-            # # Test forward/backward
-            # node.move_forward(speed=1.0, duration=3.0)
-            # node.hover(2.0)
-            # node.move_backward(speed=1.0, duration=3.0)
-            # node.hover(2.0)
-
-            # # Test left/right
-            # node.move_right(speed=1.0, duration=3.0)
-            # node.hover(2.0)
-            # node.move_left(speed=1.0, duration=3.0)
-            # node.hover(2.0)
-
-            # # Test rotation
-            # node.rotate_right(yaw_rate=30.0, duration=3.0)  # ~90° turn
-            # node.hover(2.0)
-            # node.rotate_left(yaw_rate=30.0, duration=3.0)   # Turn back
-            # node.hover(2.0)
+            # Test goto GPS from current position
+            curr_lat, curr_lon, curr_alt_amsl = node.mavros_subs.get_global_position()
+            curr_alt_rel = node.mavros_subs.get_relative_altitude()  # Get relative altitude!
             
-            # # Test circle movement
-            # node.move_circle_global(radius=5.0, speed=1.0, duration=30.0)
+            node.get_logger().info(f'Current position: Lat {curr_lat:.6f}, Lon {curr_lon:.6f}')
+            node.get_logger().info(f'Current altitude: {curr_alt_rel:.1f}m (relative), {curr_alt_amsl:.1f}m (AMSL)')
             
-            # Test square movement
-            node.move_square(speed=1.0, leg_s=3.0)
+            target_lat = curr_lat + 0.0001  # ~11m north
+            target_lon = curr_lon + 0.0001  # ~8.5m east
+            target_alt = curr_alt_rel  
+            
+            node.get_logger().info(f'Target: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)')
+            node.goto_gps(target_lat, target_lon, target_alt, timeout_s=60.0)
 
             # Land
             node.land()
@@ -423,10 +470,16 @@ def main(args=None):
         else:
             node.get_logger().error('Takeoff failed!') 
     except KeyboardInterrupt:
-        node.get_logger().info('Shutting down...')
+        node.get_logger().info('KeyboardInterrupt detected!')
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
+        try:
+            node.destroy_node()
+        except Exception:
+            pass
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     main()

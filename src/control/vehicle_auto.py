@@ -115,7 +115,7 @@ class VehicleAuto(VehicleMotion):
         # Wait for altitude to be reached
         # GLOBAL_POSITION_INT.relative_alt is in millimeters
         target_alt_mm = target_alt * 1000.0
-        threshold_mm = target_alt_mm * 0.8  # Accept 80% of target
+        threshold_mm = target_alt_mm - 400.0  # 0.4m threshold
         
         end = time.time() + timeout
         while time.time() < end:

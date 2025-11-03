@@ -25,7 +25,7 @@ def main():
     
     try:
         auto.disable_arm_check() # Disable arming check
-        auto.guided_takeoff(2.0) # Takeoff to 1m
+        auto.guided_takeoff(1.0) # Takeoff to 1m
         time.sleep(2.0)
         
         # # Turn left
