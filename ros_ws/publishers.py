@@ -110,7 +110,7 @@ class MavrosPublishers:
         self,
         latitude: float,
         longitude: float,
-        altitude_m: float,
+        altitude_m: float | None = None,
         *,
         yaw_deg: float | None = None,
         yaw_rate_deg_s: float | None = None,
@@ -167,6 +167,14 @@ class MavrosPublishers:
         # Target position
         msg.latitude = float(latitude)
         msg.longitude = float(longitude)
-        msg.altitude = float(altitude_m)
+
+        if altitude_m is not None:
+            # Set altitude if caller provided it
+            msg.altitude = float(altitude_m)
+        else:
+            try:
+                self.node.get_logger().info('Publishing global position WITHOUT altitude (altitude omitted)')
+            except Exception:
+                pass
 
         self.position_target_global_pub.publish(msg)

@@ -149,7 +149,7 @@ class AutonomousDroneNode(Node):
         distance = R * c # Distance in meters
         return distance
 
-    def goto_gps(self, target_lat, target_lon, target_alt, timeout_s=90.0):
+    def goto_gps(self, target_lat, target_lon, target_alt=None, timeout_s=90.0):
         """
         Go to GPS coordinates maintaining altitude, then land vertically
         Args:
@@ -162,8 +162,6 @@ class AutonomousDroneNode(Node):
         rate_hz = 10
         dt = 1.0 / rate_hz
         start = time.time()
-        
-        self.get_logger().info(f"Going to GPS: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)")
 
         while (time.time() - start) < timeout_s:
             rclpy.spin_once(self, timeout_sec=0.1)
@@ -178,8 +176,11 @@ class AutonomousDroneNode(Node):
             )
             
             # Compute altitude error
-            alt_error = target_alt - curr_alt
-            
+            if target_alt is not None:
+                alt_error = target_alt - curr_alt
+            else:
+                alt_error = 0.0
+
             self.mavros_pubs.publish_global_position(
                 latitude=target_lat,
                 longitude=target_lon,
@@ -189,7 +190,6 @@ class AutonomousDroneNode(Node):
 
             self.get_logger().info(
                 f"Distance to target: {distance:.2f} m | "
-                f"Alt: {abs(curr_alt):.2f}m / {abs(target_alt):.2f}m | "
                 f"Alt error: {abs(alt_error):.2f} m"
             )
 
@@ -304,7 +304,9 @@ class AutonomousDroneNode(Node):
             curr_lat, curr_lon, curr_alt = self.mavros_subs.get_global_position()
             distance = self._haversine_distance(curr_lat, curr_lon, lat, lon)
             alt_diff = abs(curr_alt - alt)
+
             self.get_logger().info(f'Distance to home: {distance:.2f} m | Alt diff: {alt_diff:.2f} m')
+            
             if distance < pos_tol_m and alt_diff < alt_tol_m:
                 self.get_logger().info('Reached home position.')
                 return True
@@ -468,10 +470,9 @@ def main(args=None):
             
             target_lat = curr_lat - 0.0001  # ~11m north
             target_lon = curr_lon - 0.0001  # ~8.5m east
-            target_alt = curr_alt_rel  
-            
-            node.get_logger().info(f'Target: Lat {target_lat:.6f}, Lon {target_lon:.6f}, Alt {target_alt:.1f}m (relative)')
-            node.goto_gps(target_lat, target_lon, target_alt, timeout_s=60.0)
+
+            node.get_logger().info(f'Target: Lat {target_lat:.6f}, Lon {target_lon:.6f}')
+            node.goto_gps(target_lat, target_lon, timeout_s=60.0)
 
             # Land
             node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0)
