@@ -177,6 +177,7 @@ class AutonomousDroneNode(Node):
             
             # Compute altitude error
             if target_alt is not None:
+                print(f"Current altitude: {curr_alt:.2f} m, Target altitude: {target_alt:.2f} m")
                 alt_error = target_alt - curr_alt
             else:
                 alt_error = 0.0
@@ -190,11 +191,11 @@ class AutonomousDroneNode(Node):
 
             self.get_logger().info(
                 f"Distance to target: {distance:.2f} m | "
-                f"Alt error: {abs(alt_error):.2f} m"
+                f"Alt error: {alt_error:.2f} m"
             )
 
             # Check if target reached (horizontal AND altitude)
-            if distance < 1.5 and abs(alt_error) < 0.8:
+            if distance < 1.5 and alt_error < 0.8:
                 self.get_logger().info("Target reached!")
                 break
 
@@ -452,10 +453,10 @@ def main(args=None):
             rclpy.spin_once(node, timeout_sec=1.0)
 
         node.get_logger().info('MAVROS connected.')
-        
+        node.mavros_srvs.set_home()
+
         # Perform simple test mission
         if node.arm_and_takeoff(altitude=5.0):
-            node.mavros_srvs.set_home()
             node.get_logger().info('Takeoff complete!')
             
             # Hover briefly
@@ -472,7 +473,7 @@ def main(args=None):
             target_lon = curr_lon - 0.0001  # ~8.5m east
 
             node.get_logger().info(f'Target: Lat {target_lat:.6f}, Lon {target_lon:.6f}')
-            node.goto_gps(target_lat, target_lon, timeout_s=60.0)
+            node.goto_gps(target_lat, target_lon, target_alt=curr_alt_rel, timeout_s=60.0)
 
             # Land
             node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0)

@@ -146,7 +146,7 @@ class MavrosSubscribers:
         Returns: altitude in meters relative to home
         """
         if self.local_position:
-            return -self.local_position.pose.position.z  # NED frame: negative Z is up
+            return self.local_position.pose.position.z  
         return 0.0
     
     def get_home_position(self) -> tuple:
