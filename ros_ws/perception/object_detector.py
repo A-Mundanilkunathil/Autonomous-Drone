@@ -44,13 +44,13 @@ class ObjectDetectorNode(Node):
         self.detector = self.load_model()
 
     def load_model(self):
-        # Load YOLOv8n model
+        # Load YOLOv8s model
         try:
-            model = YOLO('yolov8n.pt')
-            self.get_logger().info('Loaded YOLOv8n model')
+            model = YOLO('yolov8s.pt')
+            self.get_logger().info('Loaded YOLOv8s model')
             return model
         except Exception as e:
-            self.get_logger().error(f'Failed to load YOLOv8n model: {e}')
+            self.get_logger().error(f'Failed to load YOLOv8s model: {e}')
             return None
             
     def image_callback(self, msg):

@@ -10,7 +10,7 @@ class ImageSaverNode(Node):
         super().__init__('sim_bridge')
         self.subscription = self.create_subscription(
             Image,
-            '/world/iris_warehouse/model/camera/link/link/sensor/camera/image',
+            '/world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image',
             self._listener_callback,
             10)
         self.publisher = self.create_publisher(Image, '/camera/image_raw', 10)
