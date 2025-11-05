@@ -6,6 +6,7 @@ from sensor_msgs.msg import Image, CameraInfo
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
+import torch
 
 # UDP packet structure
 # uint32_t: frame_id
@@ -19,6 +20,20 @@ HDR_SIZE = struct.calcsize(HDR_FMT)
 class UdpFrameReceiver(Node):
     def __init__(self):
         super().__init__('udp_frame_receiver')
+
+        # Load MiDaS model
+        self.midas_model_type = "DPT_Hybrid"
+        self.midas = torch.hub.load("intel-isl/MiDaS", self.midas_model_type)
+        self.midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
+
+        if self.midas_model_type in ["DPT_Large", "DPT_Hybrid"]:
+            self.transform =self.midas_transforms.dpt_transform
+        else:
+            self.transform = self.midas_transforms.small_transform
+        
+        self.midas.eval()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.midas.to(self.device)
 
         # Parameters
         self.port = int(self.declare_parameter('port', 5005).value)
@@ -36,7 +51,9 @@ class UdpFrameReceiver(Node):
 
         # ROS pubs
         self.pub_img = self.create_publisher(Image, '/camera/image_raw', qos_profile)
+        self.pub_depth = self.create_publisher(Image, '/camera/depth_map', qos_profile)
         self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', qos_profile)
+
         self.bridge = CvBridge()
 
         # CameraInfo
@@ -213,17 +230,41 @@ class UdpFrameReceiver(Node):
             
             self.stats['frames_decoded'] += 1
             
+            # --------------------------------- MiDaS depth map ---------------------------------
+            # Convert BGR to RGB
+            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+            # Transform input for MiDaS
+            input_tensor = self.transform(img_rgb).to(self.device).unsqueeze(0)
+            
+            with torch.no_grad():
+                depth_prediction = self.midas(input_tensor)
+
+            depth_map = torch.nn.functional.interpolate(
+                depth_prediction.unsqueeze(1),
+                size=img_rgb.shape[:2],
+                mode='bicubic',
+                align_corners=False
+            ).squeeze().cpu().numpy()
+
+            # Convert to float32
+            depth_raw = depth_map.astype(np.float32)
+
+            # Conver to ROS Image message with encoding '32FC1'
+            depth_msg = self.bridge.cv2_to_imgmsg(depth_raw, encoding='32FC1')
+            # --------------------------------------------------------------------------------------
+
             # Log stats every 5 seconds
-            now = time.time()
-            if now - self.stats['last_log_time'] > 5.0:
+            current_time = time.time()
+            if current_time - self.stats['last_log_time'] > 5.0:
                 self.get_logger().info(
                     f"Stats: Received={self.stats['frames_received']}, "
                     f"Decoded={self.stats['frames_decoded']}, "
                     f"Dropped={self.stats['frames_dropped']}"
                 )
-                self.stats['last_log_time'] = now
+                self.stats['last_log_time'] = current_time
             
-            # Publish
+            # Publish frame
             img_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
             now = self.get_clock().now().to_msg()
             img_msg.header.stamp = now
@@ -236,6 +277,11 @@ class UdpFrameReceiver(Node):
 
             self.pub_img.publish(img_msg)
             self.pub_info.publish(cam_info)
+
+            # Publish depth map
+            depth_msg.header.stamp = now
+            depth_msg.header.frame_id = self.frame_id_str
+            self.pub_depth.publish(depth_msg)
         
         except Exception as e:
             self.get_logger().error(f'Failed to assemble/publish frame: {e}')
