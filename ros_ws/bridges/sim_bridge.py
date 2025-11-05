@@ -7,7 +7,7 @@ import os
 
 class ImageSaverNode(Node):
     def __init__(self):
-        super().__init__('image_saver_node')
+        super().__init__('sim_bridge')
         self.subscription = self.create_subscription(
             Image,
             '/world/iris_warehouse/model/camera/link/link/sensor/camera/image',
