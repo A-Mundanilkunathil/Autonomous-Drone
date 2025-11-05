@@ -4,6 +4,13 @@
 python ros_ws/bridges/udp_forwarder.py
 ```
 
+**Forward stream from simulation**
+```
+ros2 run ros_gz_bridge parameter_bridge /world/iris_warehouse/model/camera/link/link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image
+
+python3 ros_ws/bridges/sim_stream.py
+```
+
 **Stream**
 ```
 cd ~/Desktop/Autonomous-Drone/ros_ws/bridges

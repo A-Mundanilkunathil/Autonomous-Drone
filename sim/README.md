@@ -1,6 +1,8 @@
 **Launch Gazebo**
 ```
 gz sim -v4 ~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds/iris_runway.sdf
+
+gz sim -v4 ~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds/iris_warehouse.sdf
 ```
 
 **Run ArduPilot SITL**
