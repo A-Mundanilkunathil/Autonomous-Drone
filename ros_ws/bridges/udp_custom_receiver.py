@@ -235,7 +235,7 @@ class UdpFrameReceiver(Node):
             img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
             # Transform input for MiDaS
-            input_tensor = self.transform(img_rgb).to(self.device).unsqueeze(0)
+            input_tensor = self.transform(img_rgb).to(self.device)
             
             with torch.no_grad():
                 depth_prediction = self.midas(input_tensor)
@@ -250,7 +250,7 @@ class UdpFrameReceiver(Node):
             # Convert to float32
             depth_raw = depth_map.astype(np.float32)
 
-            # Conver to ROS Image message with encoding '32FC1'
+            # Convert to ROS Image message with encoding '32FC1'
             depth_msg = self.bridge.cv2_to_imgmsg(depth_raw, encoding='32FC1')
             # --------------------------------------------------------------------------------------
 
