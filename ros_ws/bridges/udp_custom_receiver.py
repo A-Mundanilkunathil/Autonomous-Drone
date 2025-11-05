@@ -1,4 +1,4 @@
-import socket, struct, time, threading, collections
+import socket, struct, time, threading
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
@@ -7,6 +7,7 @@ from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import torch
+from queue import Queue, Empty
 
 # UDP packet structure
 # uint32_t: frame_id
@@ -25,15 +26,14 @@ class UdpFrameReceiver(Node):
         self.midas_model_type = "DPT_Hybrid"
         self.midas = torch.hub.load("intel-isl/MiDaS", self.midas_model_type)
         self.midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
-
-        if self.midas_model_type in ["DPT_Large", "DPT_Hybrid"]:
-            self.transform =self.midas_transforms.dpt_transform
-        else:
-            self.transform = self.midas_transforms.small_transform
-        
+        self.transform = (self.midas_transforms.dpt_transform
+                          if self.midas_model_type in ["DPT_Large","DPT_Hybrid"]
+                          else self.midas_transforms.small_transform)
         self.midas.eval()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.midas.to(self.device)
+        try: torch.set_num_threads(1)
+        except Exception: pass
 
         # Parameters
         self.port = int(self.declare_parameter('port', 5005).value)
@@ -90,6 +90,13 @@ class UdpFrameReceiver(Node):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((self.bind_ip, self.port))
         self.sock.settimeout(0.5)
+        try: # Set receive buffer
+            self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4 * 1024 * 1024) # 4MB
+        except socket.error:
+            pass
+        
+        # Inflight frames
+        self.max_inflight_frames = 8
 
         # Reassembly buffers: frame_id -> dict(packet_num->bytes) + metadata
         self.frames = {} 
@@ -105,8 +112,20 @@ class UdpFrameReceiver(Node):
 
         # Background receiver thread
         self.running = True
-        self.rx_thread = threading.Thread(target=self.rx_loop, daemon=True)
+        self.rx_thread = threading.Thread(target=self._rx_loop, daemon=True)
         self.rx_thread.start()
+
+        # Background decoder thread
+        self.assembled_queue = Queue(maxsize=4)
+        self.decode_running = True
+        self.decode_thread = threading.Thread(target=self._decode_publish_worker, daemon=True)
+        self.decode_thread.start()
+
+        # Background depth thread
+        self.depth_queue = Queue(maxsize=2)
+        self.depth_running = True
+        self.depth_thread = threading.Thread(target=self._depth_publish_worker, daemon=True)
+        self.depth_thread.start()
 
         # Periodic flush of stale frames
         self.timer = self.create_timer(0.5, self.flush_stale_frames)
@@ -149,7 +168,7 @@ class UdpFrameReceiver(Node):
                        0.0, 0.0, 1.0, 0.0]
         return cam_info
 
-    def rx_loop(self):
+    def _rx_loop(self):
         """Background thread to receive UDP packets"""
         while self.running:
             try:
@@ -178,113 +197,168 @@ class UdpFrameReceiver(Node):
                 with self.lock:
                     f = self.frames.get(fid)
                     if f is None:
+                        # If too many frames in flight, drop oldest
+                        if len(self.frames) >= self.max_inflight_frames:
+                            oldest_id = min(self.frames.items(), key=lambda kv: kv[1]['first_ts'])[0]
+                            del self.frames[oldest_id]
+
                         self.frames[fid] = f = {
                             'total': total_pkts,
                             'size': frame_size,
-                            'parts': {},
+                            'parts': [None] * total_pkts,
+                            'filled': 0,
                             'first_ts': time.time()
                         }
                     
-                    # De-duplicate
-                    if pkt_no not in f['parts']:
-                        f['parts'][pkt_no] = payload
+                    # De-duplicate and store
+                    if 0 <= pkt_no < f['total'] and f['parts'][pkt_no] is None:
+                        f['parts'][pkt_no] = payload # Store
+                        f['filled'] += 1
                         
                         # Check if complete (do this inside lock)
-                        if len(f['parts']) == f['total']:
+                        if f['filled'] == f['total']:
                             # Extract data we need, then release lock quickly
                             completed_frame = {
                                 'fid': fid,
-                                'parts': [f['parts'][i] for i in range(f['total'])],
+                                'parts': f['parts'],
                                 'size': f['size']
                             }
                             del self.frames[fid]
                             self.stats['frames_received'] += 1
 
                 if completed_frame is not None:
-                    self.assemble_and_publish_async(completed_frame)
-            
+                    if self.assembled_queue.full():
+                        try:
+                            self.assembled_queue.get_nowait()
+                        except Empty:
+                            pass
+                    self.assembled_queue.put_nowait(completed_frame)
+
             except struct.error as e:
                 self.get_logger().warning(f'Packet parse error: {e}')
             except Exception as e:
                 self.get_logger().error(f'Unexpected error in rx_loop: {e}')
+    
+    def _decode_publish_worker(self):
+        while self.decode_running:
+            try:
+                frame_data = self.assembled_queue.get(timeout=0.2)
+            except Empty:
+                continue
 
-    def assemble_and_publish_async(self, frame_data):
-        """Assemble and publish frame without holding the lock"""
-        try:
-            # Concatenate parts
-            jpeg_bytes = b''.join(frame_data['parts'])
+            if frame_data is None:
+                self.assembled_queue.task_done()
+                break
 
-            # Sanity check
-            if len(jpeg_bytes) != frame_data['size']:
-                self.get_logger().warning(f"Frame size mismatch: expected {frame_data['size']}, got {len(jpeg_bytes)}")
-                self.stats['frames_dropped'] += 1
-                return
+            try:
+                # Assemble JPEG
+                jpeg_bytes = b''.join(frame_data['parts'])
 
-            # Decode JPEG -> BGR
-            npbuf = np.frombuffer(jpeg_bytes, dtype=np.uint8)
-            frame = cv2.imdecode(npbuf, cv2.IMREAD_COLOR) 
-            if frame is None:
-                self.get_logger().warning('Failed to decode JPEG frame')
-                self.stats['frames_dropped'] += 1
-                return
+                # Sanity check
+                if len(jpeg_bytes) != frame_data['size']:
+                    self.get_logger().warning(f"Frame size mismatch: expected {frame_data['size']}, got {len(jpeg_bytes)}")
+                    self.stats['frames_dropped'] += 1
+                    continue
+                
+                # Decode JPEG -> BGR
+                npbuf = np.frombuffer(jpeg_bytes, dtype=np.uint8)
+                frame_bgr = cv2.imdecode(npbuf, cv2.IMREAD_COLOR) 
+                if frame_bgr is None:
+                    self.get_logger().warning('Failed to decode JPEG frame')
+                    self.stats['frames_dropped'] += 1
+                    continue
+                
+                self.stats['frames_decoded'] += 1
+
+                # Log stats every 5 seconds
+                current_time = time.time()
+                if current_time - self.stats['last_log_time'] > 5.0:
+                    self.get_logger().info(
+                        f"Stats: Received={self.stats['frames_received']}, "
+                        f"Decoded={self.stats['frames_decoded']}, "
+                        f"Dropped={self.stats['frames_dropped']}"
+                    )
+                    self.stats['last_log_time'] = current_time
+                
+                # Publish frame
+                img_msg = self.bridge.cv2_to_imgmsg(frame_bgr, encoding='bgr8')
+                now = self.get_clock().now().to_msg()
+                img_msg.header.stamp = now
+                img_msg.header.frame_id = self.frame_id_str
+                self.pub_img.publish(img_msg)
+
+                # Publish CameraInfo
+                cam_info = self.cam_info
+                cam_info.header.stamp = now
+                cam_info.header.frame_id = self.frame_id_str  
+                self.pub_info.publish(cam_info)
+
+                # Hand off to depth worker
+                self._enqueue_depth(frame_bgr, now)
             
-            self.stats['frames_decoded'] += 1
-            
-            # --------------------------------- MiDaS depth map ---------------------------------
-            # Convert BGR to RGB
-            img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            except Exception as e:
+                self.get_logger().error(f'Unexpected error in decode_publish_worker: {e}')
+            finally:
+                self.assembled_queue.task_done()
+    
+    def _enqueue_depth(self, frame_bgr, stamp):
+        item = (frame_bgr, stamp)
+        if not self.depth_queue.full():
+            self.depth_queue.put_nowait(item)
+        else:
+            # Drop oldest
+            try:
+                _ = self.depth_queue.get_nowait()
+            except Empty:
+                pass
+            self.depth_queue.put_nowait(item)
+    
+    def _depth_publish_worker(self):
+        while self.depth_running:
+            try:
+                item = self.depth_queue.get(timeout=0.2)
+            except Empty:
+                continue
 
-            # Transform input for MiDaS
-            input_tensor = self.transform(img_rgb).to(self.device)
-            
-            with torch.no_grad():
-                depth_prediction = self.midas(input_tensor)
+            if item is None:
+                self.depth_queue.task_done()
+                break
 
-            depth_map = torch.nn.functional.interpolate(
-                depth_prediction.unsqueeze(1),
-                size=img_rgb.shape[:2],
-                mode='bicubic',
-                align_corners=False
-            ).squeeze().cpu().numpy()
+            frame_bgr, stamp = item
+            try:
+                # Run MiDaS
+                depth_map = self._run_midas(frame_bgr)
 
-            # Convert to float32
-            depth_raw = depth_map.astype(np.float32)
+                # Convert to ROS Image message with encoding '32FC1'
+                depth_msg = self.bridge.cv2_to_imgmsg(depth_map, encoding='32FC1')
 
-            # Convert to ROS Image message with encoding '32FC1'
-            depth_msg = self.bridge.cv2_to_imgmsg(depth_raw, encoding='32FC1')
-            # --------------------------------------------------------------------------------------
+                # Publish
+                depth_msg.header.stamp = stamp
+                depth_msg.header.frame_id = self.frame_id_str
+                self.pub_depth.publish(depth_msg)
+            except Exception as e:
+                self.get_logger().error(f'Unexpected error in depth_publish_worker: {e}')
+            finally:
+                self.depth_queue.task_done()
 
-            # Log stats every 5 seconds
-            current_time = time.time()
-            if current_time - self.stats['last_log_time'] > 5.0:
-                self.get_logger().info(
-                    f"Stats: Received={self.stats['frames_received']}, "
-                    f"Decoded={self.stats['frames_decoded']}, "
-                    f"Dropped={self.stats['frames_dropped']}"
-                )
-                self.stats['last_log_time'] = current_time
-            
-            # Publish frame
-            img_msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
-            now = self.get_clock().now().to_msg()
-            img_msg.header.stamp = now
-            img_msg.header.frame_id = self.frame_id_str
+    def _run_midas(self, frame_bgr) -> np.ndarray:
+        # Convert BGR to RGB
+        img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-            # Publish CameraInfo
-            cam_info = self.cam_info
-            cam_info.header.stamp = now
-            cam_info.header.frame_id = self.frame_id_str  
-
-            self.pub_img.publish(img_msg)
-            self.pub_info.publish(cam_info)
-
-            # Publish depth map
-            depth_msg.header.stamp = now
-            depth_msg.header.frame_id = self.frame_id_str
-            self.pub_depth.publish(depth_msg)
+        # Transform input for MiDaS
+        input_tensor = self.transform(img_rgb).to(self.device)
         
-        except Exception as e:
-            self.get_logger().error(f'Failed to assemble/publish frame: {e}')
+        with torch.no_grad():
+            depth_prediction = self.midas(input_tensor)
+
+        depth_map = torch.nn.functional.interpolate(
+            depth_prediction.unsqueeze(1),
+            size=img_rgb.shape[:2],
+            mode='bicubic',
+            align_corners=False
+        ).squeeze().cpu().numpy().astype(np.float32)
+
+        return depth_map
 
     def flush_stale_frames(self):
         # Drop frames older than 0.5s
@@ -301,19 +375,26 @@ class UdpFrameReceiver(Node):
         """Clean shutdown"""
         self.get_logger().info('Shutting down UDP receiver...')
         self.running = False
-        
+        self.decode_running = False
+        self.depth_running = False
+
         # Close socket to unblock recvfrom
-        try:
-            self.sock.close()
-        except:
-            pass
+        try: self.sock.close()
+        except: pass
         
+        # Nudge thread to exit
+        try: self.assembled_queue.put_nowait(None)
+        except: pass
+        try: self.depth_queue.put_nowait(None)
+        except: pass
+
         # Wait for thread to finish
-        if self.rx_thread.is_alive():
-            try:
-                self.rx_thread.join(timeout=2.0)
-            except:
-                pass
+        if getattr(self, "rx_thread", None) and self.rx_thread.is_alive():
+            self.rx_thread.join(timeout=2.0)
+        if getattr(self, "decode_thread", None) and self.decode_thread.is_alive():
+            self.decode_thread.join(timeout=2.0)
+        if getattr(self, "depth_thread", None) and self.depth_thread.is_alive():
+            self.depth_thread.join(timeout=2.0)
         
         super().destroy_node()
 
