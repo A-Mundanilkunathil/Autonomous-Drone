@@ -3,6 +3,19 @@ from rclpy.node import Node
 from publishers import MavrosPublishers
 from subscribers import MavrosSubscribers
 from services import MavrosServices
+from enum import Enum, auto
+from geometry_msgs.msg import TwistStamped
+from std_msgs.msg import Float32
+import time
+import math
+
+class DroneState(Enum):
+    IDLE = auto()
+    TAKEOFF = auto()
+    MISSION = auto()
+    AVOID = auto()
+    RTL = auto()
+    LAND = auto()
 
 class AutonomousDroneNode(Node):
     def __init__(self):
@@ -12,15 +25,144 @@ class AutonomousDroneNode(Node):
         self.mavros_subs = MavrosSubscribers(self)
         self.mavros_srvs = MavrosServices(self)
 
+        # Avoidance input buffer
+        self._avoid_cmd = TwistStamped()
+        self._avoid_stamp = 0.0
+        self._forward_clear_m = math.inf
+
+        # Subscribe to avoidance velocity command
+        self.create_subscription(
+            TwistStamped,
+            '/avoidance/cmd_vel',
+            self._avoidance_callback,
+            qos_profile=1
+        )
+
+        # Subscribe to forward clearance distance
+        self.create_subscription(
+            Float32,
+            '/avoidance/forward_clearance',
+            self._clearance_callback,
+            qos_profile=1
+        )
+
+        # Arbitration tunables
+        self.avoid_enter_clear = 2.5  # engage avoidance when clearance < this
+        self.avoid_exit_clear  = 3.2  # return to mission when clearance > this
+        self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
+        self.fresh_age_s       = 0.5  # how recent avoidance msg must be
+
+        # Base mission speed
+        self._mission_vx = 0.6
+
+        # State & timer
+        self.state = DroneState.IDLE
+        self._rate_hz = 20.0
+        self.create_timer(1.0 / self._rate_hz, self.control_loop)
+
         self.get_logger().info('Autonomous Drone Node initialized.')
+
+    def _avoidance_callback(self, msg: TwistStamped):
+        """Receive avoidance velocity commands"""
+        self._avoid_cmd = msg
+        self._avoid_stamp = time.time()
+
+    def _clearance_callback(self, msg: Float32):
+        """Receive forward clearance distance for state arbitration"""
+        try:
+            fc = float(msg.data)
+            # Treat inf/NaN as no obstacle
+            if math.isnan(fc) or math.isinf(fc):
+                self._forward_clear_m = math.inf
+            else:
+                self._forward_clear_m = fc
+        except Exception:
+            self._forward_clear_m = math.inf
+    
+    def _avoid_fresh(self) -> bool:
+        return (time.time() - self._avoid_stamp) < self.fresh_age_s
+    
+    def _avoid_requesting(self) -> bool:
+        """Check if avoidance is requesting lateral/vertical movement"""
+        av = self._avoid_cmd.twist.linear
+        return (abs(av.y) > self.avoid_eps) or (abs(av.z) > self.avoid_eps)
+
+    def _vx_from_clear(self, fc: float) -> float:
+        """
+        Compute forward velocity from clearance distance
+        Piecewise: unknown→creep, ≤stop→0, between→interpolate, else→mission_vx
+        """
+        stop = 1.0
+        caut = 2.5
+        
+        if not math.isfinite(fc):
+            return 0.2  # Creep when clearance unknown
+        if fc <= stop:
+            return 0.0  # Stop when too close
+        if fc < caut:
+            # Interpolate between stop and caution distances
+            t = (fc - stop) / max(1e-3, (caut - stop))
+            return 0.2 + (self._mission_vx - 0.2) * t
+        return self._mission_vx  # Full speed when clear
+
+    def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:
+        """
+        Blend mission forward velocity with avoidance lateral/vertical
+        Mission controls vx; avoidance controls vy/vz only
+        """
+        av = self._avoid_cmd.twist.linear
+        vx = min(mission_vx, 0.30)  # Hard cap forward during avoidance
+        vy = float(av.y)  # Avoidance controls lateral
+        vz = float(av.z)  # Avoidance controls vertical
+        yaw_rate = 0.0
+        return vx, vy, vz, yaw_rate
 
     def control_loop(self):
         # Check connection
         if not self.mavros_subs.is_connected():
             return
         
-        # TODO: Add control logic here
-        pass
+        # ------ STATE TRANSITIONS ------
+        if self.state == DroneState.IDLE:
+            pass
+
+        elif self.state == DroneState.MISSION:
+            if self._avoid_fresh() and (self._avoid_requesting() or
+                                        (self._forward_clear_m < self.avoid_enter_clear)):
+                self.state = DroneState.AVOID
+
+        elif self.state == DroneState.AVOID:
+            if (not self._avoid_fresh()) or \
+            (self._forward_clear_m > self.avoid_exit_clear and not self._avoid_requesting()):
+                self.state = DroneState.MISSION
+
+        # ------ STATE ACTIONS ------
+        if self.state == DroneState.MISSION:
+            # Mission controls forward speed based on clearance (soft slowdown)
+            vx = self._vx_from_clear(self._forward_clear_m)
+            vy = 0.0
+            vz = 0.0
+            yaw_rate = 0.0
+            self.mavros_pubs.set_velocity_body(vx, vy, vz, yaw_rate)
+        
+        elif self.state == DroneState.AVOID:
+            # Mission controls vx from clearance, avoidance controls vy/vz
+            vx_mission = self._vx_from_clear(self._forward_clear_m)
+            vx, vy, vz, yaw_rate = self._blend(vx_mission)
+            self.mavros_pubs.set_velocity_body(vx, vy, vz, yaw_rate)
+
+        elif self.state in (DroneState.TAKEOFF, DroneState.RTL, DroneState.LAND, DroneState.IDLE):
+            self.mavros_pubs.set_velocity_body(0.0, 0.0, 0.0, 0.0)
+
+    def start_mission(self):
+        """Enable autonomous mission mode with obstacle avoidance"""
+        self.state = DroneState.MISSION
+        self.get_logger().info('Mission mode started')
+
+    def stop_mission(self):
+        """Stop autonomous mission, return to idle"""
+        self.state = DroneState.IDLE
+        self.get_logger().info('Mission mode stopped')
 
     def arm_and_takeoff(self, altitude: float, timeout: float = 30.0) -> bool:
         """
@@ -39,7 +181,6 @@ class AutonomousDroneNode(Node):
         if not self.mavros_srvs.set_mode('GUIDED'):
             return False
         
-        import time
         time.sleep(1.0)  # Wait a moment for mode to set
 
         # Arm the drone
@@ -103,7 +244,6 @@ class AutonomousDroneNode(Node):
         
         Usage: node.move_body_velocity(1.0, 0, 0, 5.0)  # Move forward 1m/s for 5s
         """
-        import time
         rate_hz = 10
         dt = 1.0 / rate_hz
         end_time = time.time() + duration
@@ -125,7 +265,6 @@ class AutonomousDroneNode(Node):
         
         Usage: node.goto_position(10, 5, 5.0, 10.0)  # Go 10m east, 5m north, 5m altitude
         """
-        import time
         rate_hz = 10
         dt = 1.0 / rate_hz
         end_time = time.time() + duration
@@ -158,7 +297,6 @@ class AutonomousDroneNode(Node):
             target_alt: Target altitude (meters, relative to home)
             timeout_s: Maximum time to wait (seconds)
         """
-        import time
         rate_hz = 10
         dt = 1.0 / rate_hz
         start = time.time()
@@ -218,8 +356,6 @@ class AutonomousDroneNode(Node):
             self.get_logger().error('Land command failed')
             return False
         
-        import time
-        
         # Wait for drone to land (altitude near 0)
         ground_threshold = 0.4  # Consider landed if below 40cm
         start_time = time.time()
@@ -257,8 +393,6 @@ class AutonomousDroneNode(Node):
         """
         Hover in place for specified duration
         """
-        import time
-
         self.get_logger().info(f'Hovering for {duration}s...')
         end_time = time.time() + duration
         rate_hz = 10
@@ -280,7 +414,6 @@ class AutonomousDroneNode(Node):
 
         Why: Safe return procedure
         """
-        import time
         start_time = time.time()
 
         # Ensure home position is known
@@ -462,23 +595,22 @@ def main(args=None):
             # Hover briefly
             node.hover(3.0)
 
-            # Test goto GPS from current position
-            curr_lat, curr_lon, curr_alt_amsl = node.mavros_subs.get_global_position()
-            curr_alt_rel = node.mavros_subs.get_relative_altitude()  # Get relative altitude!
+            # Start autonomous mission with avoidance enabled
+            node.get_logger().info('Starting autonomous mission with obstacle avoidance...')
+            node.start_mission()
             
-            node.get_logger().info(f'Current position: Lat {curr_lat:.6f}, Lon {curr_lon:.6f}')
-            node.get_logger().info(f'Current altitude: {curr_alt_rel:.1f}m (relative), {curr_alt_amsl:.1f}m (AMSL)')
+            # Let the drone move forward for 30 seconds with avoidance
+            # The control loop will automatically switch between MISSION and AVOID states
+            time.sleep(30.0)
             
-            target_lat = curr_lat - 0.0001  # ~11m north
-            target_lon = curr_lon - 0.0001  # ~8.5m east
-
-            node.get_logger().info(f'Target: Lat {target_lat:.6f}, Lon {target_lon:.6f}')
-            node.goto_gps(target_lat, target_lon, target_alt=curr_alt_rel, timeout_s=60.0)
-
-            # Land
+            # Stop mission
+            node.stop_mission()
+            
+            # Return home and land
+            node.get_logger().info('Mission complete, returning home...')
             node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0)
             node.land()
-            node.get_logger().info('Mission complete!')
+            node.get_logger().info('All done!')
         else:
             node.get_logger().error('Takeoff failed!') 
     except KeyboardInterrupt:
