@@ -36,8 +36,8 @@ class ObjectAvoidanceNode(Node):
         )
 
         # Subscribers (synchronized)
-        self.depth_sub = message_filters.Subscriber(self, Image, '/camera/depth_map', qos_input)
-        self.det_sub = message_filters.Subscriber(self, Detection2DArray, '/detected_objects', qos_input)
+        self.depth_sub = message_filters.Subscriber(self, Image, '/camera/depth_map', qos_profile=qos_input)
+        self.det_sub = message_filters.Subscriber(self, Detection2DArray, '/detected_objects', qos_profile=qos_input)
         ts = message_filters.ApproximateTimeSynchronizer([self.depth_sub, self.det_sub], 10, 0.1)
         ts.registerCallback(self.synced_callback)
 
