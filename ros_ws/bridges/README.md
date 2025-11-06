@@ -32,4 +32,7 @@ cd ~/Desktop/Autonomous-Drone/ros_ws
 python3 "perception/object_detector.py"
 
 python ros_ws/perception/test/detection_viewer.py
+
+# View depth
+python ros_ws/perception/test/depth_viewer.py
 ```
