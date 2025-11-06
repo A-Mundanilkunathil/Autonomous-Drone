@@ -23,7 +23,7 @@ class UdpFrameReceiver(Node):
         super().__init__('udp_frame_receiver')
 
         # Load MiDaS model
-        self.midas_model_type = "DPT_Hybrid"
+        self.midas_model_type = "MiDaS_small" # or "DPT_Large", "DPT_Hybrid"
         self.midas = torch.hub.load("intel-isl/MiDaS", self.midas_model_type)
         self.midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
         self.transform = (self.midas_transforms.dpt_transform
