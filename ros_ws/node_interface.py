@@ -47,8 +47,8 @@ class AutonomousDroneNode(Node):
         )
 
         # Arbitration tunables
-        self.avoid_enter_clear = 1.0  # engage avoidance when clearance < this (matches object_avoidance caution_dist_m)
-        self.avoid_exit_clear  = 2.0  # return to mission when clearance > this (reduced from 2.5m)
+        self.avoid_enter_clear = 1.5  # engage avoidance when clearance < this (matches object_avoidance caution_dist_m)
+        self.avoid_exit_clear  = 2.5  # return to mission when clearance > this
         self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
         self.fresh_age_s       = 1.0  # how recent avoidance msg must be (increased tolerance)
 
@@ -97,18 +97,18 @@ class AutonomousDroneNode(Node):
         Compute forward velocity from clearance distance
         Allow forward movement until very close, then slow down/stop
         """
-        stop = 0.5  # STOP when VERY close (matches object_avoidance stop_dist_m)
-        caut = 1.0  # Start slowing down (matches object_avoidance caution_dist_m)
+        stop = 0.8  # STOP when close (matches object_avoidance stop_dist_m)
+        caut = 1.5  # Start slowing down (matches object_avoidance caution_dist_m)
         
         if not math.isfinite(fc):
             return self._mission_vx  # Full speed when clearance unknown/infinite (path is clear)
         if fc <= stop:
-            return 0.0  # STOP when very close (≤0.5m)
+            return 0.0  # STOP when close (≤0.8m)
         if fc < caut:
             # Interpolate between stop and caution distances
-            # At 0.5m: vx=0.0, at 1.0m: vx=mission_vx  
+            # At 0.8m: vx=0.0, at 1.5m: vx=mission_vx  
             t = (fc - stop) / max(1e-3, (caut - stop))
-            return 0.25 + (self._mission_vx - 0.25) * t  # Creep forward with minimum speed (increased from 0.20)
+            return 0.20 + (self._mission_vx - 0.20) * t  # Creep forward with minimum speed
         return self._mission_vx  # Full speed when clear
 
     def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:

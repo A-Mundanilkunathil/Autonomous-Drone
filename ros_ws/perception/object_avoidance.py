@@ -23,12 +23,18 @@ class ObjectAvoidanceNode(Node):
         self.midas_max_dist = 50.0  # Maximum distance to consider (meters)
         
         # Avoidance configurations
-        self.stop_dist_m = 0.5  # Stop when VERY close (reduced from 0.8m)
-        self.caution_dist_m = 1.0  # Start lateral avoidance closer (reduced from 1.5m)
+        self.stop_dist_m = 0.8  # Stop when close (increased for safety with drone width)
+        self.caution_dist_m = 1.5  # Start lateral avoidance earlier (increased for safety)
         self.max_side_speed = 0.6
         self.max_forward_speed = 0.8
         self.min_roi_pixels = 150 # Ignore tiny ROIs
         self.smoothing = 0.6
+        
+        # Drone physical dimensions for collision avoidance
+        # Iris quadcopter: ~0.45m diagonal (motor to motor)
+        # Use conservative estimate for safety margin
+        self.drone_width_m = 0.6  # Half-width from center to edge (with safety margin)
+        self.safety_margin_m = 0.3  # Extra clearance for safe navigation
 
         # QoS profiles
         qos_input = QoSProfile(
@@ -121,7 +127,7 @@ class ObjectAvoidanceNode(Node):
 
         return median_left, median_right, median_top, median_bottom
 
-    def _compose_cmd(self, forward_clear_m, median_left, median_right, median_top, median_bottom):
+    def _compose_cmd(self, forward_clear_m, median_left, median_right, median_top, median_bottom, left_clearance=None, right_clearance=None):
         """
         Decide body-frame lateral/vertical velocities (vy, vz) given sector distances.
         Note: vx is controlled by node_interface based on clearance, not by avoidance
@@ -143,30 +149,41 @@ class ObjectAvoidanceNode(Node):
         
         # Forward is getting tight - now check lateral/vertical options
         # Lateral choice (only if forward clearance < caution distance)
-        if not np.isnan(median_left) or not np.isnan(median_right):
+        # Use left/right clearance if provided, otherwise use median sectors
+        if left_clearance is not None and right_clearance is not None:
+            # Use direct left/right clearance measurements
+            L = left_clearance if np.isfinite(left_clearance) else -np.inf
+            R = right_clearance if np.isfinite(right_clearance) else -np.inf
+        elif not np.isnan(median_left) or not np.isnan(median_right):
             L = -np.inf if np.isnan(median_left) else median_left
             R = -np.inf if np.isnan(median_right) else median_right
+        else:
+            L = R = -np.inf
+        
+        if L > -np.inf or R > -np.inf:
             
             if forward_clear_m <= self.stop_dist_m:
                 # Forward is VERY blocked (≤0.8m) - aggressive lateral movement toward more open side
-                if L > R:
+                if L > R + 0.3:  # Left is significantly clearer (with 0.3m bias threshold)
                     vy = +self.max_side_speed
-                elif R > L:
+                elif R > L + 0.3:  # Right is significantly clearer (with 0.3m bias threshold)
                     vy = -self.max_side_speed
                 else:
-                    vy = +self.max_side_speed  # Default to left if equal
+                    # Similar clearance - prefer RIGHT to avoid left-wall hugging
+                    vy = -self.max_side_speed * 0.7  # Move right at 70% speed
             else:
                 # Forward is in caution zone (0.8m < fc < 1.5m) - scale lateral with distance
                 # Closer = more lateral, farther = less lateral
                 lateral_intensity = 1.0 - ((forward_clear_m - self.stop_dist_m) / (self.caution_dist_m - self.stop_dist_m))
-                lateral_intensity = max(0.4, min(1.0, lateral_intensity))  # Clamp between 0.4 and 1.0
+                lateral_intensity = max(0.6, min(1.0, lateral_intensity))  # Increased from 0.4 to 0.6 for more aggressive lateral
                 
-                if L > R:
+                if L > R + 0.3:  # Left is significantly clearer (with 0.3m bias threshold)
                     vy = +lateral_intensity * self.max_side_speed
-                elif R > L:
+                elif R > L + 0.3:  # Right is significantly clearer (with 0.3m bias threshold)
                     vy = -lateral_intensity * self.max_side_speed
                 else:
-                    vy = +lateral_intensity * self.max_side_speed  # Default to left if equal
+                    # Similar clearance - prefer RIGHT to avoid left-wall hugging
+                    vy = -lateral_intensity * self.max_side_speed * 0.7  # Move right at 70% speed
 
         # Vertical choice (only if forward clearance < caution distance)
         if not np.isnan(median_top) or not np.isnan(median_bottom):
@@ -195,9 +212,11 @@ class ObjectAvoidanceNode(Node):
         depth_img_raw = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='32FC1')
         H, W = depth_img_raw.shape[:2]
         
-        # Define ROI dimensions FIRST
-        center_h = int(H * 0.40)
-        center_w = int(W * 0.50)
+        # Define ROI dimensions accounting for drone physical width
+        # The ROI should be wider than just center to check for obstacles
+        # that would hit the drone's edges during forward/lateral movement
+        center_h = int(H * 0.40)  # Vertical: 40% (middle section, avoiding ground/propellers)
+        center_w = int(W * 0.60)  # Horizontal: 60% (wider to account for drone width, but not too wide)
         y1_center = (H - center_h) // 2
         y2_center = y1_center + center_h
         x1_center = (W - center_w) // 2
@@ -240,20 +259,52 @@ class ObjectAvoidanceNode(Node):
         # Extract center ROI from converted depth
         center_roi = depth_img[y1_center:y2_center, x1_center:x2_center]
         
-        # Use 20th percentile for obstacle detection
-        # Lower than median (50th) to be more sensitive to obstacles
-        # Higher than 10th to avoid single-pixel noise
-        # This finds obstacles that occupy >20% of the forward view
-        center_roi_valid = center_roi[np.isfinite(center_roi)]
-        if center_roi_valid.size > 0:
-            # Use 20th percentile for balanced obstacle detection
-            closest_forward = np.percentile(center_roi_valid, 20)
-        else:
-            closest_forward = np.inf
+        # Split center ROI into left/center/right thirds to check lateral clearance
+        roi_width = center_roi.shape[1]
+        third_width = roi_width // 3
+        
+        left_roi = center_roi[:, :third_width]  # Left third
+        center_third_roi = center_roi[:, third_width:2*third_width]  # Center third  
+        right_roi = center_roi[:, 2*third_width:]  # Right third
+        
+        # Get clearance for each region
+        left_roi_valid = left_roi[np.isfinite(left_roi)]
+        center_third_roi_valid = center_third_roi[np.isfinite(center_third_roi)]
+        right_roi_valid = right_roi[np.isfinite(right_roi)]
+        
+        # Use 20th percentile for each region
+        left_clearance = np.percentile(left_roi_valid, 20) if left_roi_valid.size > 0 else np.inf
+        center_clearance = np.percentile(center_third_roi_valid, 20) if center_third_roi_valid.size > 0 else np.inf
+        right_clearance = np.percentile(right_roi_valid, 20) if right_roi_valid.size > 0 else np.inf
+        
+        # KEY FIX: Use CENTER clearance for forward movement
+        # This allows forward progress even when sides show obstacles
+        closest_forward = center_clearance
+        
+        # Check if we can navigate around obstacle
+        # If center is blocked but one side is clear, allow forward movement toward clear side
+        if center_clearance < self.caution_dist_m:
+            # Center has obstacle - check if we can go around
+            if left_clearance > center_clearance * 1.5 and left_clearance > self.caution_dist_m:
+                # Left side is clear - use it for forward clearance
+                closest_forward = min(left_clearance, self.caution_dist_m * 2.0)
+                self.get_logger().info(
+                    f'Navigate LEFT: L={left_clearance:.2f}m C={center_clearance:.2f}m R={right_clearance:.2f}m | using={closest_forward:.2f}m',
+                    throttle_duration_sec=2.0
+                )
+            elif right_clearance > center_clearance * 1.5 and right_clearance > self.caution_dist_m:
+                # Right side is clear - use it for forward clearance
+                closest_forward = min(right_clearance, self.caution_dist_m * 2.0)
+                self.get_logger().info(
+                    f'Navigate RIGHT: L={left_clearance:.2f}m C={center_clearance:.2f}m R={right_clearance:.2f}m | using={closest_forward:.2f}m',
+                    throttle_duration_sec=2.0
+                )
         
         # Get sector scores for center region (for avoidance direction)
         mL, mR, mT, mB = self._sector_scores(depth_img, y1_center, y2_center, x1_center, x2_center)
-        base_cmd = self._compose_cmd(closest_forward, mL, mR, mT, mB)
+        
+        # Pass center clearance (not side clearances) to compose_cmd for better lateral decisions
+        base_cmd = self._compose_cmd(closest_forward, mL, mR, mT, mB, left_clearance, right_clearance)
 
         # Defaults for detection refinement
         best_cmd = base_cmd  # Start with depth-only command
@@ -285,7 +336,7 @@ class ObjectAvoidanceNode(Node):
 
             # Sector distances for this detection
             mL, mR, mT, mB = self._sector_scores(depth_img, y1, y2, x1, x2)
-            vy, vz = self._compose_cmd(roi_min, mL, mR, mT, mB)
+            vy, vz = self._compose_cmd(roi_min, mL, mR, mT, mB, None, None)
 
             # Use command from tightest obstacle (closest detection)
             if np.isfinite(roi_min) and roi_min < best_min:
@@ -343,16 +394,16 @@ class ObjectAvoidanceNode(Node):
         valid_pixels = center_roi_valid.size if 'center_roi_valid' in locals() else 0
         if np.isinf(closest_forward):
             self.get_logger().info(
-                f'Depth | Dets: {num_detections} | ROI raw_min={raw_min:.2f} | '
-                f'ROI(center 50x40%): min={roi_min:.2f}, p20={roi_min:.2f}, mean={roi_mean:.2f}, max={roi_max:.2f} | '
-                f'Valid pixels: {valid_pixels} | Forward clear: INF (all clear) | cmd vy={vy:.2f}, vz={vz:.2f}',
+                f'Depth | Dets: {num_detections} | L={left_clearance:.2f}m R={right_clearance:.2f}m | '
+                f'ROI: min={roi_min:.2f}, p20={roi_min:.2f}, mean={roi_mean:.2f} | '
+                f'Forward clear: INF | cmd vy={vy:.2f}, vz={vz:.2f}',
                 throttle_duration_sec=2.0
             )
         else:
             self.get_logger().info(
-                f'Depth | Dets: {num_detections} | ROI raw_min={raw_min:.2f} | '
-                f'ROI(center 50x40%): min={roi_min:.2f}, p20={closest_forward:.2f}, mean={roi_mean:.2f}, max={roi_max:.2f} | '
-                f'Valid pixels: {valid_pixels} | Forward clear: {closest_forward:.2f}m | cmd vy={vy:.2f}, vz={vz:.2f}',
+                f'Depth | Dets: {num_detections} | L={left_clearance:.2f}m R={right_clearance:.2f}m | '
+                f'ROI: min={roi_min:.2f}, p20={closest_forward:.2f}, mean={roi_mean:.2f} | '
+                f'Forward clear: {closest_forward:.2f}m | cmd vy={vy:.2f}, vz={vz:.2f}',
                 throttle_duration_sec=1.0
             )
 
