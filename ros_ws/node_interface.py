@@ -47,10 +47,10 @@ class AutonomousDroneNode(Node):
         )
 
         # Arbitration tunables
-        self.avoid_enter_clear = 2.5  # engage avoidance when clearance < this
-        self.avoid_exit_clear  = 3.2  # return to mission when clearance > this
+        self.avoid_enter_clear = 2.0  # engage avoidance when clearance < this (reduced from 2.5m)
+        self.avoid_exit_clear  = 3.0  # return to mission when clearance > this (reduced from 3.5m)
         self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
-        self.fresh_age_s       = 0.5  # how recent avoidance msg must be
+        self.fresh_age_s       = 1.0  # how recent avoidance msg must be (increased tolerance)
 
         # Base mission speed
         self._mission_vx = 0.6
@@ -58,7 +58,7 @@ class AutonomousDroneNode(Node):
         # State & timer
         self.state = DroneState.IDLE
         self._rate_hz = 20.0
-        self.create_timer(1.0 / self._rate_hz, self.control_loop)
+        self._control_timer = self.create_timer(1.0 / self._rate_hz, self.control_loop)
 
         self.get_logger().info('Autonomous Drone Node initialized.')
 
@@ -76,8 +76,13 @@ class AutonomousDroneNode(Node):
                 self._forward_clear_m = math.inf
             else:
                 self._forward_clear_m = fc
-        except Exception:
+            self.get_logger().info(
+                f'Clearance received: {self._forward_clear_m:.2f}m',
+                throttle_duration_sec=2.0
+            )
+        except Exception as e:
             self._forward_clear_m = math.inf
+            self.get_logger().warn(f'Clearance callback error: {e}')
     
     def _avoid_fresh(self) -> bool:
         return (time.time() - self._avoid_stamp) < self.fresh_age_s
@@ -90,19 +95,20 @@ class AutonomousDroneNode(Node):
     def _vx_from_clear(self, fc: float) -> float:
         """
         Compute forward velocity from clearance distance
-        Piecewise: unknown→creep, ≤stop→0, between→interpolate, else→mission_vx
+        Allow forward movement until very close, then slow down/stop
         """
-        stop = 1.0
-        caut = 2.5
+        stop = 0.6  # STOP only when VERY close (reduced from 1.0m)
+        caut = 2.0  # Start slowing down (reduced from 2.5m)
         
         if not math.isfinite(fc):
-            return 0.2  # Creep when clearance unknown
+            return self._mission_vx  # Full speed when clearance unknown/infinite (path is clear)
         if fc <= stop:
-            return 0.0  # Stop when too close
+            return 0.0  # STOP only when VERY close (≤0.6m)
         if fc < caut:
             # Interpolate between stop and caution distances
+            # At 0.6m: vx=0.0, at 2.0m: vx=mission_vx  
             t = (fc - stop) / max(1e-3, (caut - stop))
-            return 0.2 + (self._mission_vx - 0.2) * t
+            return 0.15 + (self._mission_vx - 0.15) * t  # Creep forward even when close
         return self._mission_vx  # Full speed when clear
 
     def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:
@@ -122,19 +128,34 @@ class AutonomousDroneNode(Node):
         if not self.mavros_subs.is_connected():
             return
         
+        # Debug: Log current state periodically
+        self.get_logger().info(
+            f'State: {self.state.name}, clear={self._forward_clear_m:.2f}m, '
+            f'avoid_fresh={self._avoid_fresh()}',
+            throttle_duration_sec=2.0
+        )
+        
         # ------ STATE TRANSITIONS ------
         if self.state == DroneState.IDLE:
             pass
 
         elif self.state == DroneState.MISSION:
-            if self._avoid_fresh() and (self._avoid_requesting() or
-                                        (self._forward_clear_m < self.avoid_enter_clear)):
+            if self._forward_clear_m < self.avoid_enter_clear:
+                # Enter AVOID mode based on clearance alone (don't require fresh avoidance)
                 self.state = DroneState.AVOID
+                self.get_logger().info(
+                    f'MISSION→AVOID: clear={self._forward_clear_m:.2f}m',
+                    throttle_duration_sec=2.0
+                )
 
         elif self.state == DroneState.AVOID:
-            if (not self._avoid_fresh()) or \
-            (self._forward_clear_m > self.avoid_exit_clear and not self._avoid_requesting()):
+            if self._forward_clear_m > self.avoid_exit_clear and not self._avoid_requesting():
+                # Exit AVOID only when clearance is good AND not requesting avoidance
                 self.state = DroneState.MISSION
+                self.get_logger().info(
+                    f'AVOID→MISSION: clear={self._forward_clear_m:.2f}m',
+                    throttle_duration_sec=2.0
+                )
 
         # ------ STATE ACTIONS ------
         if self.state == DroneState.MISSION:
@@ -144,12 +165,28 @@ class AutonomousDroneNode(Node):
             vz = 0.0
             yaw_rate = 0.0
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+            self.get_logger().info(
+                f'MISSION: vx={vx:.2f}, clear={self._forward_clear_m:.2f}m',
+                throttle_duration_sec=2.0
+            )
         
         elif self.state == DroneState.AVOID:
             # Mission controls vx from clearance, avoidance controls vy/vz
             vx_mission = self._vx_from_clear(self._forward_clear_m)
-            vx, vy, vz, yaw_rate = self._blend(vx_mission)
+            # Use avoidance commands if fresh, otherwise use defaults
+            if self._avoid_fresh():
+                vx, vy, vz, yaw_rate = self._blend(vx_mission)
+            else:
+                # Avoidance not fresh - just use clearance-based vx with no lateral/vertical
+                vx = vx_mission
+                vy = 0.0
+                vz = 0.0
+                yaw_rate = 0.0
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+            self.get_logger().info(
+                f'AVOID: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, clear={self._forward_clear_m:.2f}m, fresh={self._avoid_fresh()}',
+                throttle_duration_sec=2.0
+            )
 
         elif self.state == DroneState.TAKEOFF:
             # During takeoff, don't interfere - let ArduPilot handle it
@@ -181,12 +218,15 @@ class AutonomousDroneNode(Node):
         """
         self.get_logger().info(f'Starting takeoff to {altitude}m...')
 
-        # Set state to TAKEOFF to prevent control loop interference
+        # Disable control loop during takeoff to prevent any interference
+        self._control_timer.cancel()
         self.state = DroneState.TAKEOFF
 
         # Set mode to GUIDED
         if not self.mavros_srvs.set_mode('GUIDED'):
             self.state = DroneState.IDLE
+            # Re-enable control loop
+            self._control_timer = self.create_timer(1.0 / self._rate_hz, self.control_loop)
             return False
         
         time.sleep(1.0)  # Wait a moment for mode to set
@@ -194,12 +234,16 @@ class AutonomousDroneNode(Node):
         # Arm the drone
         if not self.mavros_srvs.arm(True):
             self.state = DroneState.IDLE
+            # Re-enable control loop
+            self._control_timer = self.create_timer(1.0 / self._rate_hz, self.control_loop)
             return False
         time.sleep(1.0)  # Wait a moment for arming
 
         # Send takeoff command
         if not self.mavros_srvs.takeoff(altitude):
             self.state = DroneState.IDLE
+            # Re-enable control loop
+            self._control_timer = self.create_timer(1.0 / self._rate_hz, self.control_loop)
             return False
         
         self.get_logger().info(f'Takeoff command sent. Waiting for altitude {altitude}m...')
@@ -232,6 +276,8 @@ class AutonomousDroneNode(Node):
             final_alt = abs(self.mavros_subs.get_position()[2])
             self.get_logger().info(f'Takeoff successful! Reached {final_alt:.2f}m')
             self.state = DroneState.IDLE  # Return to IDLE after successful takeoff
+            # Re-enable control loop
+            self._control_timer = self.create_timer(1.0 / self._rate_hz, self.control_loop)
             return True
         else:
             final_alt = abs(self.mavros_subs.get_position()[2])
@@ -239,6 +285,8 @@ class AutonomousDroneNode(Node):
                 f'Takeoff timeout! Only reached {final_alt:.2f}m in {timeout}s'
             )
             self.state = DroneState.IDLE  # Return to IDLE on failure
+            # Re-enable control loop
+            self._control_timer = self.create_timer(1.0 / self._rate_hz, self.control_loop)
             return False
 
     def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0, yaw_rate: float = 0.0):
@@ -601,30 +649,36 @@ def main(args=None):
         node.mavros_srvs.set_home()
 
         # Perform simple test mission
-        if node.arm_and_takeoff(altitude=2.0):
+        if node.arm_and_takeoff(altitude=2.0, timeout=60.0):
             node.get_logger().info('Takeoff complete!')
-            
-            # Hover briefly
-            node.hover(3.0)
+            # Hover briefly (non-blocking)
+            node.get_logger().info('Hovering for 3s...')
+            hover_start = time.time()
+            while (time.time() - hover_start) < 3.0:
+                rclpy.spin_once(node, timeout_sec=0.1)
+                time.sleep(0.1)
 
             # Start autonomous mission with avoidance enabled
             node.get_logger().info('Starting autonomous mission with obstacle avoidance...')
             node.start_mission()
-            
+
             # Let the drone move forward for 30 seconds with avoidance
-            # The control loop will automatically switch between MISSION and AVOID states
-            time.sleep(30.0)
-            
+            # Keep spinning to allow control_loop callbacks to execute
+            mission_start = time.time()
+            while (time.time() - mission_start) < 120.0:
+                rclpy.spin_once(node, timeout_sec=0.1)
+                time.sleep(0.1)
+
             # Stop mission
             node.stop_mission()
-            
+
             # Return home and land
             node.get_logger().info('Mission complete, returning home...')
             node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0)
             node.land()
             node.get_logger().info('All done!')
         else:
-            node.get_logger().error('Takeoff failed!') 
+            node.get_logger().error('Takeoff failed!')
     except KeyboardInterrupt:
         node.get_logger().info('KeyboardInterrupt detected!')
     finally:
