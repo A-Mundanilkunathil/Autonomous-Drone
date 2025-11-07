@@ -14,6 +14,12 @@ class ObjectAvoidanceNode(Node):
         super().__init__('object_avoidance')
         self.bridge = CvBridge()
 
+        # MiDaS depth conversion parameters
+        # MiDaS outputs inverse depth (larger=closer, smaller=farther)
+        # These parameters convert to approximate metric depth
+        self.midas_scale = 5.0  # Scaling factor to convert to meters
+        self.midas_max_dist = 10.0  # Maximum distance to consider (meters)
+        
         # Avoidance configurations
         self.stop_dist_m = 1.0
         self.caution_dist_m = 2.5
@@ -50,6 +56,29 @@ class ObjectAvoidanceNode(Node):
         self._last_vz = 0.0
 
         self.get_logger().info('Object avoidance node started')
+    
+    def _convert_midas_depth(self, depth_img):
+        """
+        Convert MiDaS inverse/relative depth to approximate metric depth in meters
+        
+        MiDaS outputs inverse depth where:
+        - Larger values = closer objects
+        - Smaller values = farther objects
+        - Values are not in any specific unit
+        
+        We invert and scale to get approximate metric depth
+        """
+        # Avoid division by zero
+        depth_img = np.clip(depth_img, 1e-6, None)
+        
+        # Invert: smaller MiDaS value (far) → larger depth (meters)
+        # Scale to approximate metric range
+        metric_depth = self.midas_scale / depth_img
+        
+        # Clip to maximum distance
+        metric_depth = np.clip(metric_depth, 0, self.midas_max_dist)
+        
+        return metric_depth.astype(np.float32)
     
     def _median_ignore_nan(self, a):
         if a.size == 0:
@@ -134,8 +163,9 @@ class ObjectAvoidanceNode(Node):
         return vy, vz
 
     def synced_callback(self, depth_msg, det_msg):
-        # Convert depth image
-        depth_img = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='32FC1')
+        # Convert depth image from MiDaS inverse depth to metric depth
+        depth_img_raw = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='32FC1')
+        depth_img = self._convert_midas_depth(depth_img_raw)
         H, W = depth_img.shape[:2]
 
         # Defaults
@@ -190,10 +220,24 @@ class ObjectAvoidanceNode(Node):
         clearance_msg.data = float(closest_forward) if np.isfinite(closest_forward) else float('inf')
         self.clearance_pub.publish(clearance_msg)
 
-        if np.isnan(closest_forward):
-            self.get_logger().info('Avoidance: unknown forward clearance, creeping')
-        else:
-            self.get_logger().info(f'Avoidance: forward_clear={closest_forward:.2f} m | cmd vy={vy:.2f}, vz={vz:.2f}')
+        # Log depth statistics for debugging
+        if det_msg.detections:
+            depth_min = np.nanmin(depth_img) if np.isfinite(depth_img).any() else np.nan
+            depth_max = np.nanmax(depth_img) if np.isfinite(depth_img).any() else np.nan
+            depth_mean = np.nanmean(depth_img) if np.isfinite(depth_img).any() else np.nan
+            
+            if np.isnan(closest_forward):
+                self.get_logger().info(
+                    f'Depth stats: min={depth_min:.2f}, mean={depth_mean:.2f}, max={depth_max:.2f} | '
+                    f'Avoidance: unknown forward clearance, creeping',
+                    throttle_duration_sec=2.0
+                )
+            else:
+                self.get_logger().info(
+                    f'Depth stats: min={depth_min:.2f}, mean={depth_mean:.2f}, max={depth_max:.2f} | '
+                    f'Avoidance: forward_clear={closest_forward:.2f}m | cmd vy={vy:.2f}, vz={vz:.2f}',
+                    throttle_duration_sec=2.0
+                )
 
 def main(args=None):
     rclpy.init(args=args)

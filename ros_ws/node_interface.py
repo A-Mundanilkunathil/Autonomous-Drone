@@ -143,16 +143,16 @@ class AutonomousDroneNode(Node):
             vy = 0.0
             vz = 0.0
             yaw_rate = 0.0
-            self.mavros_pubs.set_velocity_body(vx, vy, vz, yaw_rate)
+            self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
         
         elif self.state == DroneState.AVOID:
             # Mission controls vx from clearance, avoidance controls vy/vz
             vx_mission = self._vx_from_clear(self._forward_clear_m)
             vx, vy, vz, yaw_rate = self._blend(vx_mission)
-            self.mavros_pubs.set_velocity_body(vx, vy, vz, yaw_rate)
+            self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
 
         elif self.state in (DroneState.TAKEOFF, DroneState.RTL, DroneState.LAND, DroneState.IDLE):
-            self.mavros_pubs.set_velocity_body(0.0, 0.0, 0.0, 0.0)
+            self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
 
     def start_mission(self):
         """Enable autonomous mission mode with obstacle avoidance"""
@@ -589,7 +589,7 @@ def main(args=None):
         node.mavros_srvs.set_home()
 
         # Perform simple test mission
-        if node.arm_and_takeoff(altitude=5.0):
+        if node.arm_and_takeoff(altitude=2.0):
             node.get_logger().info('Takeoff complete!')
             
             # Hover briefly

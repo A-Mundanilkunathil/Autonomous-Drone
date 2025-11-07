@@ -10,6 +10,8 @@ ros2 run ros_gz_bridge parameter_bridge /world/iris_warehouse/model/camera/link/
 
 ros2 run ros_gz_bridge parameter_bridge /world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image
 
+ros2 run ros_gz_bridge parameter_bridge /world/iris_warehouse/model/depth_camera/link/link/sensor/camera/depth_image@sensor_msgs/msg/Image[gz.msgs.Image
+
 python3 ros_ws/bridges/sim_bridge.py
 ```
 
