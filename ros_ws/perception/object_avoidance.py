@@ -17,8 +17,8 @@ class ObjectAvoidanceNode(Node):
         # MiDaS depth conversion parameters
         # MiDaS outputs inverse depth (larger=closer, smaller=farther)
         # These parameters convert to approximate metric depth
-        self.midas_scale = 5.0  # Scaling factor to convert to meters
-        self.midas_max_dist = 10.0  # Maximum distance to consider (meters)
+        self.midas_scale = 50.0  # Scaling factor to convert to meters (increased for warehouse scale)
+        self.midas_max_dist = 50.0  # Maximum distance to consider (meters)
         
         # Avoidance configurations
         self.stop_dist_m = 1.0

@@ -151,7 +151,11 @@ class AutonomousDroneNode(Node):
             vx, vy, vz, yaw_rate = self._blend(vx_mission)
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
 
-        elif self.state in (DroneState.TAKEOFF, DroneState.RTL, DroneState.LAND, DroneState.IDLE):
+        elif self.state == DroneState.TAKEOFF:
+            # During takeoff, don't interfere - let ArduPilot handle it
+            pass
+
+        elif self.state in (DroneState.RTL, DroneState.LAND, DroneState.IDLE):
             self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
 
     def start_mission(self):
@@ -177,19 +181,25 @@ class AutonomousDroneNode(Node):
         """
         self.get_logger().info(f'Starting takeoff to {altitude}m...')
 
+        # Set state to TAKEOFF to prevent control loop interference
+        self.state = DroneState.TAKEOFF
+
         # Set mode to GUIDED
         if not self.mavros_srvs.set_mode('GUIDED'):
+            self.state = DroneState.IDLE
             return False
         
         time.sleep(1.0)  # Wait a moment for mode to set
 
         # Arm the drone
         if not self.mavros_srvs.arm(True):
+            self.state = DroneState.IDLE
             return False
         time.sleep(1.0)  # Wait a moment for arming
 
         # Send takeoff command
         if not self.mavros_srvs.takeoff(altitude):
+            self.state = DroneState.IDLE
             return False
         
         self.get_logger().info(f'Takeoff command sent. Waiting for altitude {altitude}m...')
@@ -221,12 +231,14 @@ class AutonomousDroneNode(Node):
         if target_reached:
             final_alt = abs(self.mavros_subs.get_position()[2])
             self.get_logger().info(f'Takeoff successful! Reached {final_alt:.2f}m')
+            self.state = DroneState.IDLE  # Return to IDLE after successful takeoff
             return True
         else:
             final_alt = abs(self.mavros_subs.get_position()[2])
             self.get_logger().warn(
                 f'Takeoff timeout! Only reached {final_alt:.2f}m in {timeout}s'
             )
+            self.state = DroneState.IDLE  # Return to IDLE on failure
             return False
 
     def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0, yaw_rate: float = 0.0):
