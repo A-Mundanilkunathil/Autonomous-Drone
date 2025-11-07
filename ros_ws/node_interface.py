@@ -47,8 +47,8 @@ class AutonomousDroneNode(Node):
         )
 
         # Arbitration tunables
-        self.avoid_enter_clear = 2.0  # engage avoidance when clearance < this (reduced from 2.5m)
-        self.avoid_exit_clear  = 3.0  # return to mission when clearance > this (reduced from 3.5m)
+        self.avoid_enter_clear = 1.0  # engage avoidance when clearance < this (matches object_avoidance caution_dist_m)
+        self.avoid_exit_clear  = 2.0  # return to mission when clearance > this (reduced from 2.5m)
         self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
         self.fresh_age_s       = 1.0  # how recent avoidance msg must be (increased tolerance)
 
@@ -97,27 +97,28 @@ class AutonomousDroneNode(Node):
         Compute forward velocity from clearance distance
         Allow forward movement until very close, then slow down/stop
         """
-        stop = 0.6  # STOP only when VERY close (reduced from 1.0m)
-        caut = 2.0  # Start slowing down (reduced from 2.5m)
+        stop = 0.5  # STOP when VERY close (matches object_avoidance stop_dist_m)
+        caut = 1.0  # Start slowing down (matches object_avoidance caution_dist_m)
         
         if not math.isfinite(fc):
             return self._mission_vx  # Full speed when clearance unknown/infinite (path is clear)
         if fc <= stop:
-            return 0.0  # STOP only when VERY close (≤0.6m)
+            return 0.0  # STOP when very close (≤0.5m)
         if fc < caut:
             # Interpolate between stop and caution distances
-            # At 0.6m: vx=0.0, at 2.0m: vx=mission_vx  
+            # At 0.5m: vx=0.0, at 1.0m: vx=mission_vx  
             t = (fc - stop) / max(1e-3, (caut - stop))
-            return 0.15 + (self._mission_vx - 0.15) * t  # Creep forward even when close
+            return 0.25 + (self._mission_vx - 0.25) * t  # Creep forward with minimum speed (increased from 0.20)
         return self._mission_vx  # Full speed when clear
 
     def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:
         """
         Blend mission forward velocity with avoidance lateral/vertical
         Mission controls vx; avoidance controls vy/vz only
+        Keep moving forward even during avoidance!
         """
         av = self._avoid_cmd.twist.linear
-        vx = min(mission_vx, 0.30)  # Hard cap forward during avoidance
+        vx = mission_vx  # Use calculated forward speed (don't hard cap anymore)
         vy = float(av.y)  # Avoidance controls lateral
         vz = float(av.z)  # Avoidance controls vertical
         yaw_rate = 0.0

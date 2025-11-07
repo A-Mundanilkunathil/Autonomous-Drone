@@ -17,14 +17,14 @@ class ObjectAvoidanceNode(Node):
 
         # MiDaS depth conversion parameters
         # MiDaS outputs inverse depth (larger=closer, smaller=farther)
-        # These parameters convert to approximate metric depth
-        self.midas_scale = 50.0  # Scaling factor to convert to meters (increased for warehouse scale)
+        # Raw MiDaS values for warehouse: ~10-50 (far), ~100-300 (close poles)
+        # Scale chosen so: MiDaS=100 → 200/100 = 2m, MiDaS=20 → 200/20 = 10m
+        self.midas_scale = 200.0  # Tuned for raw MiDaS warehouse values
         self.midas_max_dist = 50.0  # Maximum distance to consider (meters)
         
         # Avoidance configurations
-        self.stop_dist_m = 0.6  # Stop when VERY close (was 1.0m - too conservative)
-        self.caution_dist_m = 2.0  # Start lateral avoidance (reduced from 2.5m)
-        self.min_valid_depth = 0.15  # Filter only extreme noise (was 0.3m - too aggressive)
+        self.stop_dist_m = 0.5  # Stop when VERY close (reduced from 0.8m)
+        self.caution_dist_m = 1.0  # Start lateral avoidance closer (reduced from 1.5m)
         self.max_side_speed = 0.6
         self.max_forward_speed = 0.8
         self.min_roi_pixels = 150 # Ignore tiny ROIs
@@ -67,19 +67,31 @@ class ObjectAvoidanceNode(Node):
         MiDaS outputs inverse depth where:
         - Larger values = closer objects
         - Smaller values = farther objects
-        - Values are not in any specific unit
+        - Raw values are relative but consistent within scene
         
         We invert and scale to get approximate metric depth
         """
-        # Avoid division by zero
-        depth_img = np.clip(depth_img, 1e-6, None)
+        # Create mask for pixels that should be ignored (zeros from masking)
+        ignore_mask = depth_img < 0.1
+        
+        # Avoid division by zero - clip to small positive value
+        depth_img = np.clip(depth_img, 0.1, None)
         
         # Invert: smaller MiDaS value (far) → larger depth (meters)
-        # Scale to approximate metric range
+        # Scale=200 tuned for raw MiDaS warehouse values:
+        # - MiDaS=10 (far) → depth=200/10=20m
+        # - MiDaS=20 → depth=200/20=10m
+        # - MiDaS=50 → depth=200/50=4m
+        # - MiDaS=100 (mid) → depth=200/100=2m
+        # - MiDaS=200 (close) → depth=200/200=1m
+        # - MiDaS=400 (very close) → depth=200/400=0.5m
         metric_depth = self.midas_scale / depth_img
         
-        # Clip to maximum distance
-        metric_depth = np.clip(metric_depth, 0, self.midas_max_dist)
+        # Set ignored pixels to infinity
+        metric_depth[ignore_mask] = np.inf
+        
+        # Clip to maximum distance (but keep inf values)
+        metric_depth = np.where(np.isinf(metric_depth), np.inf, np.clip(metric_depth, 0, self.midas_max_dist))
         
         return metric_depth.astype(np.float32)
     
@@ -136,7 +148,7 @@ class ObjectAvoidanceNode(Node):
             R = -np.inf if np.isnan(median_right) else median_right
             
             if forward_clear_m <= self.stop_dist_m:
-                # Forward is VERY blocked (≤0.6m) - aggressive lateral movement toward more open side
+                # Forward is VERY blocked (≤0.8m) - aggressive lateral movement toward more open side
                 if L > R:
                     vy = +self.max_side_speed
                 elif R > L:
@@ -144,10 +156,10 @@ class ObjectAvoidanceNode(Node):
                 else:
                     vy = +self.max_side_speed  # Default to left if equal
             else:
-                # Forward is in caution zone (0.6m < fc < 2.0m) - gentle lateral toward open side
-                # Scale lateral speed with distance: closer = more lateral movement
+                # Forward is in caution zone (0.8m < fc < 1.5m) - scale lateral with distance
+                # Closer = more lateral, farther = less lateral
                 lateral_intensity = 1.0 - ((forward_clear_m - self.stop_dist_m) / (self.caution_dist_m - self.stop_dist_m))
-                lateral_intensity = max(0.3, min(1.0, lateral_intensity))  # Clamp between 0.3 and 1.0
+                lateral_intensity = max(0.4, min(1.0, lateral_intensity))  # Clamp between 0.4 and 1.0
                 
                 if L > R:
                     vy = +lateral_intensity * self.max_side_speed
@@ -181,36 +193,63 @@ class ObjectAvoidanceNode(Node):
     def synced_callback(self, depth_msg, det_msg):
         # Convert depth image from MiDaS inverse depth to metric depth
         depth_img_raw = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='32FC1')
-        depth_img = self._convert_midas_depth(depth_img_raw)
-        H, W = depth_img.shape[:2]
+        H, W = depth_img_raw.shape[:2]
         
-        # Filter out noise: set anything < min_valid_depth to inf (likely artifacts)
-        depth_img[depth_img < self.min_valid_depth] = np.inf
-        
-        # Mask out top 30% of image where propellers appear
-        propeller_mask_height = int(H * 0.30)
-        depth_img[:propeller_mask_height, :] = np.inf  # Set propeller area to infinite distance
-        
-        # Mask out bottom 30% where ground appears (more aggressive - was 25%)
-        ground_mask_height = int(H * 0.30)
-        depth_img[H - ground_mask_height:, :] = np.inf  # Set ground area to infinite distance
-        
-        # Mask out left/right 25% edges (more aggressive - was 20%)
-        edge_mask_width = int(W * 0.25)
-        depth_img[:, :edge_mask_width] = np.inf  # Left edge
-        depth_img[:, W - edge_mask_width:] = np.inf  # Right edge
-
-        # ALWAYS analyze forward center region for obstacles (even without YOLO detections)
-        # Focus TIGHTLY on the actual flight path: center 50% horizontally, middle 40% vertically
-        center_h = int(H * 0.40)  # Middle 40% vertically (smaller window)
-        center_w = int(W * 0.50)  # Center 50% horizontally (tighter focus)
+        # Define ROI dimensions FIRST
+        center_h = int(H * 0.40)
+        center_w = int(W * 0.50)
         y1_center = (H - center_h) // 2
         y2_center = y1_center + center_h
         x1_center = (W - center_w) // 2
         x2_center = x1_center + center_w
         
+        # DIAGNOSTIC: Check raw MiDaS values in center BEFORE any masking
+        center_roi_raw_unmasked = depth_img_raw[y1_center:y2_center, x1_center:x2_center]
+        center_roi_raw_valid = center_roi_raw_unmasked[center_roi_raw_unmasked > 1e-6]
+        
+        if center_roi_raw_valid.size > 0:
+            raw_p10 = np.percentile(center_roi_raw_valid, 10)
+            raw_p50 = np.percentile(center_roi_raw_valid, 50)
+            raw_min = np.min(center_roi_raw_valid)
+            raw_max = np.max(center_roi_raw_valid)
+            self.get_logger().info(
+                f'RAW MiDaS center ROI: min={raw_min:.1f}, p10={raw_p10:.1f}, p50={raw_p50:.1f}, max={raw_max:.1f} | '
+                f'Converted: p10={200.0/raw_p10:.2f}m, p50={200.0/raw_p50:.2f}m',
+                throttle_duration_sec=2.0
+            )
+        
+        # Apply masks to raw image BEFORE conversion (set to 0)
+        depth_img_raw_masked = depth_img_raw.copy()
+        
+        # Mask out top 30% where propellers appear
+        propeller_mask_height = int(H * 0.30)
+        depth_img_raw_masked[:propeller_mask_height, :] = 0.0
+        
+        # Mask out bottom 30% where ground appears
+        ground_mask_height = int(H * 0.30)
+        depth_img_raw_masked[H - ground_mask_height:, :] = 0.0
+        
+        # Mask out left/right 25% edges
+        edge_mask_width = int(W * 0.25)
+        depth_img_raw_masked[:, :edge_mask_width] = 0.0
+        depth_img_raw_masked[:, W - edge_mask_width:] = 0.0
+        
+        # Convert masked raw image to metric depth (zeros become inf)
+        depth_img = self._convert_midas_depth(depth_img_raw_masked)
+        
+        # Extract center ROI from converted depth
         center_roi = depth_img[y1_center:y2_center, x1_center:x2_center]
-        closest_forward = np.nanmin(center_roi) if np.isfinite(center_roi).any() else np.inf
+        
+        # Use 20th percentile for obstacle detection
+        # Lower than median (50th) to be more sensitive to obstacles
+        # Higher than 10th to avoid single-pixel noise
+        # This finds obstacles that occupy >20% of the forward view
+        center_roi_valid = center_roi[np.isfinite(center_roi)]
+        if center_roi_valid.size > 0:
+            # Use 20th percentile for balanced obstacle detection
+            closest_forward = np.percentile(center_roi_valid, 20)
+        else:
+            closest_forward = np.inf
         
         # Get sector scores for center region (for avoidance direction)
         mL, mR, mT, mB = self._sector_scores(depth_img, y1_center, y2_center, x1_center, x2_center)
@@ -299,17 +338,22 @@ class ObjectAvoidanceNode(Node):
             roi_min = roi_mean = roi_max = np.nan
         
         num_detections = len(det_msg.detections)
+        
+        # Enhanced logging with more detail
+        valid_pixels = center_roi_valid.size if 'center_roi_valid' in locals() else 0
         if np.isinf(closest_forward):
             self.get_logger().info(
-                f'Depth | Dets: {num_detections} | ROI raw_min={raw_min:.2f} | ROI(center 50x40%): min={roi_min:.2f}, mean={roi_mean:.2f}, max={roi_max:.2f} | '
-                f'Forward clear: INF (all clear) | cmd vy={vy:.2f}, vz={vz:.2f}',
+                f'Depth | Dets: {num_detections} | ROI raw_min={raw_min:.2f} | '
+                f'ROI(center 50x40%): min={roi_min:.2f}, p20={roi_min:.2f}, mean={roi_mean:.2f}, max={roi_max:.2f} | '
+                f'Valid pixels: {valid_pixels} | Forward clear: INF (all clear) | cmd vy={vy:.2f}, vz={vz:.2f}',
                 throttle_duration_sec=2.0
             )
         else:
             self.get_logger().info(
-                f'Depth | Dets: {num_detections} | ROI raw_min={raw_min:.2f} | ROI(center 50x40%): min={roi_min:.2f}, mean={roi_mean:.2f}, max={roi_max:.2f} | '
-                f'Forward clear: {closest_forward:.2f}m | cmd vy={vy:.2f}, vz={vz:.2f}',
-                throttle_duration_sec=2.0
+                f'Depth | Dets: {num_detections} | ROI raw_min={raw_min:.2f} | '
+                f'ROI(center 50x40%): min={roi_min:.2f}, p20={closest_forward:.2f}, mean={roi_mean:.2f}, max={roi_max:.2f} | '
+                f'Valid pixels: {valid_pixels} | Forward clear: {closest_forward:.2f}m | cmd vy={vy:.2f}, vz={vz:.2f}',
+                throttle_duration_sec=1.0
             )
 
 def main(args=None):

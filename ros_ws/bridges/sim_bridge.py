@@ -120,6 +120,8 @@ class SimBridgeNode(Node):
             align_corners=False
         ).squeeze().cpu().numpy().astype(np.float32)
 
+        # Return RAW MiDaS output without normalization
+        # MiDaS inverse depth values are relative but consistent within a scene
         return depth_map
     
     def destroy_node(self):
