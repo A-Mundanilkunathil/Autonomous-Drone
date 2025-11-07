@@ -2,11 +2,9 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
-from vision_msgs.msg import Detection2DArray
 from std_msgs.msg import Float32
 from cv_bridge import CvBridge
 import numpy as np
-import message_filters
 from geometry_msgs.msg import TwistStamped
 import cv2
 
@@ -49,11 +47,13 @@ class ObjectAvoidanceNode(Node):
             depth=10
         )
 
-        # Subscribers (synchronized)
-        self.depth_sub = message_filters.Subscriber(self, Image, '/camera/depth_map', qos_profile=qos_input)
-        self.det_sub = message_filters.Subscriber(self, Detection2DArray, '/detected_objects', qos_profile=qos_input)
-        ts = message_filters.ApproximateTimeSynchronizer([self.depth_sub, self.det_sub], 10, 0.1)
-        ts.registerCallback(self.synced_callback)
+        # Subscribe to depth only - no object detector needed!
+        self.depth_sub = self.create_subscription(
+            Image,
+            '/camera/depth_map',
+            self.depth_callback,
+            qos_profile=qos_input
+        )
 
         # Publishers - velocity command + forward clearance
         self.cmd_pub = self.create_publisher(TwistStamped, '/avoidance/cmd_vel', qos_output)
@@ -164,26 +164,26 @@ class ObjectAvoidanceNode(Node):
             
             if forward_clear_m <= self.stop_dist_m:
                 # Forward is VERY blocked (≤0.8m) - aggressive lateral movement toward more open side
-                if L > R + 0.3:  # Left is significantly clearer (with 0.3m bias threshold)
+                if L > R + 0.5:  # Left is significantly clearer (with 0.5m bias threshold - increased from 0.3m)
                     vy = +self.max_side_speed
-                elif R > L + 0.3:  # Right is significantly clearer (with 0.3m bias threshold)
+                elif R > L + 0.2:  # Right needs less advantage (0.2m) to prefer it - AGGRESSIVE right bias
                     vy = -self.max_side_speed
                 else:
-                    # Similar clearance - prefer RIGHT to avoid left-wall hugging
-                    vy = -self.max_side_speed * 0.7  # Move right at 70% speed
+                    # Similar clearance - strongly prefer RIGHT to avoid left-wall hugging
+                    vy = -self.max_side_speed * 0.85  # Move right at 85% speed (increased from 70%)
             else:
                 # Forward is in caution zone (0.8m < fc < 1.5m) - scale lateral with distance
                 # Closer = more lateral, farther = less lateral
                 lateral_intensity = 1.0 - ((forward_clear_m - self.stop_dist_m) / (self.caution_dist_m - self.stop_dist_m))
                 lateral_intensity = max(0.6, min(1.0, lateral_intensity))  # Increased from 0.4 to 0.6 for more aggressive lateral
                 
-                if L > R + 0.3:  # Left is significantly clearer (with 0.3m bias threshold)
+                if L > R + 0.5:  # Left needs more advantage (0.5m) to prefer it
                     vy = +lateral_intensity * self.max_side_speed
-                elif R > L + 0.3:  # Right is significantly clearer (with 0.3m bias threshold)
+                elif R > L + 0.2:  # Right needs less advantage (0.2m) - AGGRESSIVE right bias
                     vy = -lateral_intensity * self.max_side_speed
                 else:
-                    # Similar clearance - prefer RIGHT to avoid left-wall hugging
-                    vy = -lateral_intensity * self.max_side_speed * 0.7  # Move right at 70% speed
+                    # Similar clearance - strongly prefer RIGHT to avoid left-wall hugging
+                    vy = -lateral_intensity * self.max_side_speed * 0.85  # Move right at 85% speed (increased from 70%)
 
         # Vertical choice (only if forward clearance < caution distance)
         if not np.isnan(median_top) or not np.isnan(median_bottom):
@@ -207,7 +207,8 @@ class ObjectAvoidanceNode(Node):
 
         return vy, vz
 
-    def synced_callback(self, depth_msg, det_msg):
+    def depth_callback(self, depth_msg):
+        """Process depth image and generate avoidance commands - no object detector needed!"""
         # Convert depth image from MiDaS inverse depth to metric depth
         depth_img_raw = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='32FC1')
         H, W = depth_img_raw.shape[:2]
@@ -303,48 +304,10 @@ class ObjectAvoidanceNode(Node):
         # Get sector scores for center region (for avoidance direction)
         mL, mR, mT, mB = self._sector_scores(depth_img, y1_center, y2_center, x1_center, x2_center)
         
-        # Pass center clearance (not side clearances) to compose_cmd for better lateral decisions
-        base_cmd = self._compose_cmd(closest_forward, mL, mR, mT, mB, left_clearance, right_clearance)
-
-        # Defaults for detection refinement
-        best_cmd = base_cmd  # Start with depth-only command
-        best_min = closest_forward if np.isfinite(closest_forward) else np.inf
-
-        # Refine with YOLO detections if available
-        for det in det_msg.detections:
-            x = int(round(det.bbox.center.x)) if hasattr(det.bbox.center, 'x') else int(round(det.bbox.center.position.x))
-            y = int(round(det.bbox.center.y)) if hasattr(det.bbox.center, 'y') else int(round(det.bbox.center.position.y))
-            w = int(det.bbox.size_x)
-            h = int(det.bbox.size_y)
-
-            # Region of interest
-            y1 = max(0, y-h//2)
-            y2 = min(H, y+h//2)
-            x1 = max(0, x-w//2)
-            x2 = min(W, x+w//2)
-
-            roi = depth_img[y1:y2, x1:x2]
-            if roi.size == 0:
-                continue
-
-            # Get closest point in this detection
-            roi_min = np.nanmin(roi) if np.isfinite(roi).any() else np.nan
-            
-            # Update global closest if this detection is closer
-            if np.isfinite(roi_min) and roi_min < closest_forward:
-                closest_forward = roi_min
-
-            # Sector distances for this detection
-            mL, mR, mT, mB = self._sector_scores(depth_img, y1, y2, x1, x2)
-            vy, vz = self._compose_cmd(roi_min, mL, mR, mT, mB, None, None)
-
-            # Use command from tightest obstacle (closest detection)
-            if np.isfinite(roi_min) and roi_min < best_min:
-                best_min = roi_min
-                best_cmd = (vy, vz)
+        # Generate avoidance command using depth-based analysis only
+        vy, vz = self._compose_cmd(closest_forward, mL, mR, mT, mB, left_clearance, right_clearance)
 
         # Publish velocity command (only lateral/vertical, vx=0)
-        vy, vz = best_cmd
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
@@ -388,20 +351,18 @@ class ObjectAvoidanceNode(Node):
         else:
             roi_min = roi_mean = roi_max = np.nan
         
-        num_detections = len(det_msg.detections)
-        
         # Enhanced logging with more detail
         valid_pixels = center_roi_valid.size if 'center_roi_valid' in locals() else 0
         if np.isinf(closest_forward):
             self.get_logger().info(
-                f'Depth | Dets: {num_detections} | L={left_clearance:.2f}m R={right_clearance:.2f}m | '
+                f'Depth-only | L={left_clearance:.2f}m C={center_clearance:.2f}m R={right_clearance:.2f}m | '
                 f'ROI: min={roi_min:.2f}, p20={roi_min:.2f}, mean={roi_mean:.2f} | '
                 f'Forward clear: INF | cmd vy={vy:.2f}, vz={vz:.2f}',
                 throttle_duration_sec=2.0
             )
         else:
             self.get_logger().info(
-                f'Depth | Dets: {num_detections} | L={left_clearance:.2f}m R={right_clearance:.2f}m | '
+                f'Depth-only | L={left_clearance:.2f}m C={center_clearance:.2f}m R={right_clearance:.2f}m | '
                 f'ROI: min={roi_min:.2f}, p20={closest_forward:.2f}, mean={roi_mean:.2f} | '
                 f'Forward clear: {closest_forward:.2f}m | cmd vy={vy:.2f}, vz={vz:.2f}',
                 throttle_duration_sec=1.0
