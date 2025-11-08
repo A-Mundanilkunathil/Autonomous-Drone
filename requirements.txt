@@ -25,3 +25,4 @@ shapely
 catkin_pkg
 ultralytics
 timm
+pyrealsense2-macosx
