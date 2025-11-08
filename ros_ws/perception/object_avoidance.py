@@ -21,8 +21,8 @@ class ObjectAvoidanceNode(Node):
         self.midas_max_dist = 50.0  # Maximum distance to consider (meters)
         
         # Avoidance configurations
-        self.stop_dist_m = 0.8  # Stop when close (increased for safety with drone width)
-        self.caution_dist_m = 1.5  # Start lateral avoidance earlier (increased for safety)
+        self.stop_dist_m = 0.5  # Stop when VERY close (reduced to avoid early triggering)
+        self.caution_dist_m = 0.8  # Start lateral avoidance only when close (reduced from 1.5m)
         self.max_side_speed = 0.6
         self.max_forward_speed = 0.8
         self.min_roi_pixels = 150 # Ignore tiny ROIs

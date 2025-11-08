@@ -47,8 +47,8 @@ class AutonomousDroneNode(Node):
         )
 
         # Arbitration tunables
-        self.avoid_enter_clear = 1.5  # engage avoidance when clearance < this (matches object_avoidance caution_dist_m)
-        self.avoid_exit_clear  = 2.5  # return to mission when clearance > this
+        self.avoid_enter_clear = 0.8  # engage avoidance when clearance < this (matches object_avoidance caution_dist_m)
+        self.avoid_exit_clear  = 1.5  # return to mission when clearance > this
         self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
         self.fresh_age_s       = 1.0  # how recent avoidance msg must be (increased tolerance)
 
@@ -97,8 +97,8 @@ class AutonomousDroneNode(Node):
         Compute forward velocity from clearance distance
         Allow forward movement until very close, then slow down/stop
         """
-        stop = 0.8  # STOP when close (matches object_avoidance stop_dist_m)
-        caut = 1.5  # Start slowing down (matches object_avoidance caution_dist_m)
+        stop = 0.5  # STOP when VERY close (matches object_avoidance stop_dist_m)
+        caut = 0.8  # Start slowing down (matches object_avoidance caution_dist_m)
         
         if not math.isfinite(fc):
             return self._mission_vx  # Full speed when clearance unknown/infinite (path is clear)
