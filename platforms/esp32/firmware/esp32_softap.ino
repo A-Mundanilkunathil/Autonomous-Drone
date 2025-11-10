@@ -135,7 +135,7 @@ void setup() {
   Serial.println("Camera initialized, ready to stream!");
 
   frame_queue = xQueueCreate(2, sizeof(FrameData)); // Queue for 2 frames
-  xTaskCreatePinnedToCore(cameraTask, "Camera", 4096, NULL, 3, NULL, 1); // Camera task on core 1
+  xTaskCreatePinnedToCore(cameraTask, "Camera", 12288, NULL, 3, NULL, 1); // Camera task on core 1
   xTaskCreatePinnedToCore(udpTransmissionTask, "UDP", 8192, NULL, 1, &udp_task, 0); // UDP task on core 0
 }
 
