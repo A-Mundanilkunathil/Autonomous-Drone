@@ -47,10 +47,10 @@ class AutonomousDroneNode(Node):
         )
 
         # Arbitration tunables
-        self.avoid_enter_clear = 0.8  # engage avoidance when clearance < this (matches object_avoidance caution_dist_m)
+        self.avoid_enter_clear = 0.8  # engage avoidance when clearance < this 
         self.avoid_exit_clear  = 1.5  # return to mission when clearance > this
         self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
-        self.fresh_age_s       = 1.0  # how recent avoidance msg must be (increased tolerance)
+        self.fresh_age_s       = 1.0  # how recent avoidance msg must be
 
         # Base mission speed
         self._mission_vx = 0.6
@@ -68,18 +68,12 @@ class AutonomousDroneNode(Node):
         self._avoid_stamp = time.time()
 
     def _clearance_callback(self, msg: Float32):
-        """Receive forward clearance distance for state arbitration"""
         try:
             fc = float(msg.data)
-            # Treat inf/NaN as no obstacle
             if math.isnan(fc) or math.isinf(fc):
                 self._forward_clear_m = math.inf
             else:
                 self._forward_clear_m = fc
-            self.get_logger().info(
-                f'Clearance received: {self._forward_clear_m:.2f}m',
-                throttle_duration_sec=2.0
-            )
         except Exception as e:
             self._forward_clear_m = math.inf
             self.get_logger().warn(f'Clearance callback error: {e}')
@@ -88,17 +82,12 @@ class AutonomousDroneNode(Node):
         return (time.time() - self._avoid_stamp) < self.fresh_age_s
     
     def _avoid_requesting(self) -> bool:
-        """Check if avoidance is requesting lateral/vertical movement"""
         av = self._avoid_cmd.twist.linear
         return (abs(av.y) > self.avoid_eps) or (abs(av.z) > self.avoid_eps)
 
     def _vx_from_clear(self, fc: float) -> float:
-        """
-        Compute forward velocity from clearance distance
-        Allow forward movement until very close, then slow down/stop
-        """
-        stop = 0.5  # STOP when VERY close (matches object_avoidance stop_dist_m)
-        caut = 0.8  # Start slowing down (matches object_avoidance caution_dist_m)
+        stop = 0.5
+        caut = 0.8
         
         if not math.isfinite(fc):
             return self._mission_vx  # Full speed when clearance unknown/infinite (path is clear)
@@ -142,55 +131,32 @@ class AutonomousDroneNode(Node):
 
         elif self.state == DroneState.MISSION:
             if self._forward_clear_m < self.avoid_enter_clear:
-                # Enter AVOID mode based on clearance alone (don't require fresh avoidance)
                 self.state = DroneState.AVOID
-                self.get_logger().info(
-                    f'MISSION→AVOID: clear={self._forward_clear_m:.2f}m',
-                    throttle_duration_sec=2.0
-                )
 
         elif self.state == DroneState.AVOID:
             if self._forward_clear_m > self.avoid_exit_clear and not self._avoid_requesting():
-                # Exit AVOID only when clearance is good AND not requesting avoidance
                 self.state = DroneState.MISSION
-                self.get_logger().info(
-                    f'AVOID→MISSION: clear={self._forward_clear_m:.2f}m',
-                    throttle_duration_sec=2.0
-                )
 
         # ------ STATE ACTIONS ------
         if self.state == DroneState.MISSION:
-            # Mission controls forward speed based on clearance (soft slowdown)
             vx = self._vx_from_clear(self._forward_clear_m)
             vy = 0.0
             vz = 0.0
             yaw_rate = 0.0
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
-            self.get_logger().info(
-                f'MISSION: vx={vx:.2f}, clear={self._forward_clear_m:.2f}m',
-                throttle_duration_sec=2.0
-            )
         
         elif self.state == DroneState.AVOID:
-            # Mission controls vx from clearance, avoidance controls vy/vz
             vx_mission = self._vx_from_clear(self._forward_clear_m)
-            # Use avoidance commands if fresh, otherwise use defaults
             if self._avoid_fresh():
                 vx, vy, vz, yaw_rate = self._blend(vx_mission)
             else:
-                # Avoidance not fresh - just use clearance-based vx with no lateral/vertical
                 vx = vx_mission
                 vy = 0.0
                 vz = 0.0
                 yaw_rate = 0.0
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
-            self.get_logger().info(
-                f'AVOID: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, clear={self._forward_clear_m:.2f}m, fresh={self._avoid_fresh()}',
-                throttle_duration_sec=2.0
-            )
 
         elif self.state == DroneState.TAKEOFF:
-            # During takeoff, don't interfere - let ArduPilot handle it
             pass
 
         elif self.state in (DroneState.RTL, DroneState.LAND, DroneState.IDLE):
