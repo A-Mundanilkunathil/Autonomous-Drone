@@ -7,7 +7,7 @@ import torch
 import numpy as np
 from scipy.optimize import curve_fit
 
-SAVE_DIR = "src/perception/calibration/"
+SAVE_DIR = "src/perception/calibration/esp32_calib_wall"
 MANIFEST = os.path.join(SAVE_DIR, "manifest.csv")
 OUT_NPZ = os.path.join(SAVE_DIR, "esp32_midas_calibration.npz")
 
