@@ -90,15 +90,13 @@ class AutonomousDroneNode(Node):
         caut = 0.8
         
         if not math.isfinite(fc):
-            return self._mission_vx  # Full speed when clearance unknown/infinite (path is clear)
+            return self._mission_vx
         if fc <= stop:
-            return 0.0  # STOP when close (≤0.8m)
+            return 0.0
         if fc < caut:
-            # Interpolate between stop and caution distances
-            # At 0.8m: vx=0.0, at 1.5m: vx=mission_vx  
             t = (fc - stop) / max(1e-3, (caut - stop))
-            return 0.20 + (self._mission_vx - 0.20) * t  # Creep forward with minimum speed
-        return self._mission_vx  # Full speed when clear
+            return 0.20 + (self._mission_vx - 0.20) * t
+        return self._mission_vx
 
     def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:
         """
@@ -117,13 +115,6 @@ class AutonomousDroneNode(Node):
         # Check connection
         if not self.mavros_subs.is_connected():
             return
-        
-        # Debug: Log current state periodically
-        self.get_logger().info(
-            f'State: {self.state.name}, clear={self._forward_clear_m:.2f}m, '
-            f'avoid_fresh={self._avoid_fresh()}',
-            throttle_duration_sec=2.0
-        )
         
         # ------ STATE TRANSITIONS ------
         if self.state == DroneState.IDLE:

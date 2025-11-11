@@ -17,11 +17,16 @@ class ObjectAvoidanceNode(Node):
         self.midas_scale = 200.0
         self.midas_max_dist = 50.0
         
+        # MiDaS inverse depth calibration
         midas_calib_path = self.declare_parameter('midas_calib_npz', '').value
         if midas_calib_path:
-            midas_calib = np.load(midas_calib_path)
-            self.midas_scale = midas_calib['scale']
-            self.midas_max_dist = midas_calib['max_dist']
+            try:
+                midas_calib = np.load(midas_calib_path)
+                self.midas_scale = midas_calib['scale']
+                self.midas_max_dist = midas_calib['max_dist']
+                self.get_logger().info('Loaded MiDaS calibration file')
+            except Exception as e:
+                self.get_logger().error(f'Failed to load MiDaS calibration file: {e}')
 
         # Avoidance configurations
         self.stop_dist_m = 0.5
@@ -59,7 +64,6 @@ class ObjectAvoidanceNode(Node):
         # Publishers
         self.cmd_pub = self.create_publisher(TwistStamped, '/avoidance/cmd_vel', qos_output)
         self.clearance_pub = self.create_publisher(Float32, '/avoidance/forward_clearance', qos_output)
-        self.debug_img_pub = self.create_publisher(Image, '/avoidance/debug_img', qos_output)
 
         # Last command for smoothing (EMA) 
         self._last_vy = 0.0
@@ -243,15 +247,6 @@ class ObjectAvoidanceNode(Node):
         clearance_msg = Float32()
         clearance_msg.data = float(closest_forward) if np.isfinite(closest_forward) else float('inf')
         self.clearance_pub.publish(clearance_msg)
-
-        # Publish debug visualization
-        debug_img = cv2.normalize(depth_img, None, 0, 255, cv2.NORM_MINMAX, cv2.CV_8U)
-        debug_img = cv2.applyColorMap(debug_img, cv2.COLORMAP_JET)
-        cv2.rectangle(debug_img, (x1_center, y1_center), (x2_center, y2_center), (0, 255, 0), 2)
-        text = f"Clear: {closest_forward:.2f}m" if np.isfinite(closest_forward) else "Clear: INF"
-        cv2.putText(debug_img, text, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        debug_msg = self.bridge.cv2_to_imgmsg(debug_img, encoding='bgr8')
-        self.debug_img_pub.publish(debug_msg)
 
 def main(args=None):
     rclpy.init(args=args)
