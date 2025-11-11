@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 
+import os
+import time
 import cv2
-import numpy as np
-from calibrate_depth import load_midas_model, estimate_midas_depth, apply_calibration
 import socket
 import struct
 import threading
-from collections import defaultdict
+import csv
+import numpy as np
 from queue import Queue, Empty
-import time
+from collections import defaultdict
 
 UDP_IP = "192.168.1.89"
 UDP_PORT = 5005
 HEADER_SIZE = 14
 SOCKET_BUFFER = 4096
+SAVE_DIR = "esp32_calib_wall"
+os.makedirs(SAVE_DIR, exist_ok=True)
+MANIFEST = os.path.join(SAVE_DIR, "manifest.csv")
 
 frame_queue = Queue(maxsize=3)
 raw_packet_queue = Queue(maxsize=500)
@@ -89,64 +93,63 @@ def get_esp32_image():
         return None
 
 def main():
-    receiver_thread = threading.Thread(target=udp_receiver, daemon=True)
-    receiver_thread.start()
-    
-    processor_thread = threading.Thread(target=packet_processor, daemon=True)
-    processor_thread.start()
-    
-    print("Starting UDP receiver on {}:{}".format(UDP_IP, UDP_PORT))
+    print(f"Starting ESP32 UDP receiver on {UDP_IP}:{UDP_PORT}")
+    threading.Thread(target=udp_receiver, daemon=True).start()
+    threading.Thread(target=packet_processor, daemon=True).start()
     time.sleep(1)
-    
-    print("Loading MiDaS model and calibration...")
-    midas, transform, device = load_midas_model('MiDaS_small')
-    
-    try:
-        calib = np.load('src/perception/calibration/midas_calibration.npz')
-        scale = calib['scale']
-        shift = calib['shift']
-        print(f"Using RealSense calibration: scale={scale:.6f}, shift={shift:.6f}\n")
-    except:
-        try:
-            calib = np.load('src/perception/calibration/esp32_midas_calibration.npz')
-            scale = calib['scale']
-            shift = calib['shift']
-            print(f"Using ESP32 wall calibration: scale={scale:.6f}, shift={shift:.6f}\n")
-        except:
-            print("No calibration found. Using default values.")
-            scale, shift = 1.0, 0.0
-    
-    print("Press 'q' to quit\n")
+
+    if not os.path.exists(MANIFEST):
+        with open(MANIFEST, "w", newline="") as f:
+            csv.writer(f).writerow(["filename", "distance_m"])
+
+    hotkeys = {
+        ord('1'): 0.5, ord('2'): 1.0, ord('3'): 1.5, ord('4'): 2.0,
+        ord('5'): 2.5, ord('6'): 3.0, ord('7'): 4.0, ord('8'): 5.0
+    }
+    current_dist = 1.0
+    idx = 0
+
+    print("\nControls:")
+    print("  1-8: Set distance (0.5m to 5.0m)")
+    print("  [ ]: Decrease distance by 0.1m")
+    print("  ]: Increase distance by 0.1m")
+    print("  s: Save image with current distance")
+    print("  q: Quit\n")
     
     while True:
         img = get_esp32_image()
         if img is None:
-            time.sleep(0.01)
+            cv2.waitKey(1)
             continue
+
+        vis = img.copy()
+        cv2.putText(vis, f"Distance: {current_dist:.2f}m", (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        cv2.putText(vis, "1-8: preset | [/]: adjust | s: save | q: quit", (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+        cv2.imshow("ESP32 Distance Calibration", vis)
         
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        
-        midas_depth = estimate_midas_depth(img_rgb, midas, transform, device)
-        real_depth = apply_calibration(midas_depth, scale, shift)
-        
-        depth_colormap = cv2.applyColorMap(
-            cv2.convertScaleAbs(real_depth * 50, alpha=1), 
-            cv2.COLORMAP_JET
-        )
-        
-        h, w = img.shape[:2]
-        center_depth = real_depth[h//2, w//2]
-        
-        cv2.putText(img, f"Center: {center_depth:.2f}m", (10, 30),
-                   cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        
-        display = np.hstack([img, depth_colormap])
-        cv2.imshow('ESP32 Real-World Depth', display)
-        
-        if cv2.waitKey(1) & 0xFF == ord('q'):
+        k = cv2.waitKey(1) & 0xFF
+        if k in hotkeys:
+            current_dist = float(hotkeys[k])
+        elif k == ord('['):
+            current_dist = max(0.2, current_dist - 0.1)
+        elif k == ord(']'):
+            current_dist = current_dist + 0.1
+        elif k == ord('s'):
+            fn = f"esp32_wall_{idx:03d}.png"
+            path = os.path.join(SAVE_DIR, fn)
+            cv2.imwrite(path, img)
+            with open(MANIFEST, "a", newline="") as f:
+                csv.writer(f).writerow([fn, f"{current_dist:.3f}"])
+            print(f"Saved {fn} at {current_dist:.3f}m")
+            idx += 1
+        elif k == ord('q'):
             break
-    
+
     cv2.destroyAllWindows()
+    print(f"\nSaved {idx} images in: {SAVE_DIR}")
+    print("Next step: Run calibrate_midas_scale.py")
 
 if __name__ == "__main__":
     main()
