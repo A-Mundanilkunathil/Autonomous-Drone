@@ -28,7 +28,14 @@ python3 udp_custom_receiver.py --ros-args \
 **Run object detector**
 ```
 cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 " perception/object_detector.py"
+python3 "perception/object_detector.py"
+```
+
+**Run object avoidance**
+```
+cd ~/Desktop/Autonomous-Drone/ros_ws
+python3 perception/object_avoidance.py --ros-args \
+  -p midas_calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/perception/esp32_midas_calibration.npz
 ```
 
 **Run autonomous drone**

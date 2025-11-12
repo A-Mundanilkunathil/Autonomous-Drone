@@ -6,8 +6,6 @@ python ros_ws/bridges/udp_forwarder.py
 
 **Forward stream from simulation**
 ```
-ros2 run ros_gz_bridge parameter_bridge /world/iris_warehouse/model/camera/link/link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image
-
 ros2 run ros_gz_bridge parameter_bridge /world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image@sensor_msgs/msg/Image[gz.msgs.Image
 
 python3 ros_ws/bridges/sim_bridge.py
@@ -28,9 +26,6 @@ sudo apt install ros-jazzy-image-view
 ros2 run image_view image_view --ros-args -r image:=/camera/image_raw
 
 # View detection images
-cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 "perception/object_detector.py"
-
 python ros_ws/perception/test/detection_viewer.py
 
 # View depth

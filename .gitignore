@@ -5,3 +5,4 @@ calibration_images/
 venv/ 
 *.pt
 .vscode/
+*.png
