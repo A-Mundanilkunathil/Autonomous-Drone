@@ -188,19 +188,19 @@ class AutonomousDroneNode(Node):
         self.state = DroneState.TAKEOFF
 
         if not self.mavros_srvs.set_mode('GUIDED'):
-            self.state = DroneState.IDLE
+            self.get_logger().error('Failed to set GUIDED mode')
             return False
         
         self._sleep_nonblocking(1.0, rate_hz=self._blocking_rate_hz)
 
         if not self.mavros_srvs.arm(True):
-            self.state = DroneState.IDLE
+            self.get_logger().error('Failed to arm drone')
             return False
         
         self._sleep_nonblocking(1.0, rate_hz=self._blocking_rate_hz)
 
         if not self.mavros_srvs.takeoff(altitude):
-            self.state = DroneState.IDLE
+            self.get_logger().error('Failed to send takeoff command')
             return False
         
         self.get_logger().info(f'Takeoff command sent. Waiting for altitude {altitude}m...')
@@ -408,7 +408,7 @@ class AutonomousDroneNode(Node):
             self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
             self._sleep_nonblocking(dt, rate_hz=rate_hz)
     
-    def return_to_launch(self, pos_tol_m: float, alt_tol_m: float, timeout: float = 180.0) -> bool:
+    def return_to_launch(self, pos_tol_m: float, alt_tol_m: float, timeout: float = 180.0, smart: bool = True) -> bool:
         """
         Command the drone to return to launch position
 
@@ -416,22 +416,43 @@ class AutonomousDroneNode(Node):
             pos_tol_m: Position tolerance in meters
             alt_tol_m: Altitude tolerance in meters
             timeout: Maximum time to wait for RTL (seconds)
+            smart: If True, try SMART_RTL first then fallback to RTL
 
         Why: Safe return procedure
         """
         home = self.mavros_subs.get_home_position()
         if home is None:
             self.get_logger().error('Home position unknown, cannot RTL.')
-        else:
-            lat, lon, alt = home
-            self.get_logger().info(f'Home position: Lat {lat}, Lon {lon}, Alt {alt}m')
-
-        if not self.mavros_srvs.set_mode('RTL'):
-            self.get_logger().error('Failed to set RTL mode.')
             return False
         
-        self.get_logger().info('Returning to Launch (RTL)...')
+        lat, lon, alt = home
+        self.get_logger().info(f'Home position: Lat {lat}, Lon {lon}, Alt {alt}m')
         
+        if smart:
+            from pymavlink import mavutil
+            master = None
+            try:
+                master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
+                master.wait_heartbeat(timeout=10)
+                self.get_logger().info('Connected via UDP (simulation)')
+            except Exception as e_udp:
+                self.get_logger().warn(f'UDP connection failed: {e_udp}. Trying serial...')
+                try:
+                    master = mavutil.mavlink_connection('/dev/ttyUSB0', baud=57600)
+                    master.wait_heartbeat(timeout=10)
+                    self.get_logger().info('Connected via serial (hardware)')
+                except Exception as e_serial:
+                    self.get_logger().error(f'Failed to connect via UDP and serial: {e_serial}')
+                    return False
+            master.set_mode(21)  # SMART_RTL
+            master.close()
+            self.get_logger().info('SMART_RTL mode activated')
+        else:
+            if not self.mavros_srvs.set_mode('RTL'):
+                self.get_logger().error('Failed to set RTL mode.')
+                return False
+            self.get_logger().info('RTL mode activated')
+            
         deadline = time.monotonic() + timeout
         rate_hz = 20.0
         dt = 1.0 / rate_hz
@@ -606,14 +627,14 @@ def main(args=None):
             node.get_logger().info('Starting autonomous mission with obstacle avoidance...')
             node.start_mission()
 
-            mission_deadline = time.monotonic() + 120.0
+            mission_deadline = time.monotonic() + 60.0
             while time.monotonic() < mission_deadline:
                 node._sleep_nonblocking(dt, rate_hz=rate_hz)
 
             node.stop_mission()
 
             node.get_logger().info('Mission complete, returning home...')
-            node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0)
+            node.return_to_launch(pos_tol_m=1.0, alt_tol_m=1.0, timeout=180.0, smart=True)
             node.land()
             node.get_logger().info('All done!')
         else:
