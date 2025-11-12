@@ -32,14 +32,9 @@ class ObjectAvoidanceNode(Node):
         self.stop_dist_m = 0.5
         self.caution_dist_m = 0.8
         self.max_side_speed = 0.6
-        self.max_forward_speed = 0.8
         self.min_roi_pixels = 150
         self.smoothing = 0.6
         
-        # Drone physical dimensions
-        self.drone_width_m = 0.6
-        self.safety_margin_m = 0.3
-
         # QoS profiles
         qos_input = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
