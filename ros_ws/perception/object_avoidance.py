@@ -16,14 +16,15 @@ class ObjectAvoidanceNode(Node):
         # MiDaS depth conversion parameters
         self.midas_scale = 200.0
         self.midas_max_dist = 50.0
-        
+        self.midas_shift = 0.0
+
         # MiDaS inverse depth calibration
         midas_calib_path = self.declare_parameter('midas_calib_npz', '').value
         if midas_calib_path:
             try:
                 midas_calib = np.load(midas_calib_path)
                 self.midas_scale = midas_calib['scale']
-                self.midas_max_dist = midas_calib['max_dist']
+                self.midas_shift = midas_calib['shift']
                 self.get_logger().info('Loaded MiDaS calibration file')
             except Exception as e:
                 self.get_logger().error(f'Failed to load MiDaS calibration file: {e}')
@@ -68,9 +69,19 @@ class ObjectAvoidanceNode(Node):
     
     def _convert_midas_depth(self, depth_img):
         """Convert MiDaS inverse depth to metric depth in meters"""
+        # Mask out invalid depths
         ignore_mask = depth_img < 0.1
+
+        # Prevent division by zero
         depth_img = np.clip(depth_img, 0.1, None)
+
+        # Depth = scale / inv_depth
         metric_depth = self.midas_scale / depth_img
+
+        if self.midas_shift != 0.0: 
+            metric_depth += self.midas_shift
+
+        # Mask ignored pixels as infinite depth
         metric_depth[ignore_mask] = np.inf
         metric_depth = np.where(np.isinf(metric_depth), np.inf, np.clip(metric_depth, 0, self.midas_max_dist))
         return metric_depth.astype(np.float32)

@@ -26,9 +26,6 @@ sudo apt install ros-jazzy-image-view
 ros2 run image_view image_view --ros-args -r image:=/camera/image_raw
 
 # View detection images
-cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 "perception/object_detector.py"
-
 python ros_ws/perception/test/detection_viewer.py
 
 # View depth
