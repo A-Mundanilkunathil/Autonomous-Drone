@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
-from ultralytics import YOLO
+from ultralytics import YOLOE
 import cv2
 
 class ObjectDetectorNode(Node):
@@ -46,11 +46,14 @@ class ObjectDetectorNode(Node):
     def load_model(self):
         # Load YOLOv8s model
         try:
-            model = YOLO('yolov8s.pt')
-            self.get_logger().info('Loaded YOLOv8s model')
+            model = YOLOE('yoloe-11l-seg.pt')
+            names = ["can", "box", "shelf", "fan", "barrel", "floor"]
+            model.set_classes(names, model.get_text_pe(names))
+
+            self.get_logger().info('Loaded YOLOE model')
             return model
         except Exception as e:
-            self.get_logger().error(f'Failed to load YOLOv8s model: {e}')
+            self.get_logger().error(f'Failed to load YOLOE model: {e}')
             return None
             
     def image_callback(self, msg):
@@ -72,7 +75,7 @@ class ObjectDetectorNode(Node):
         self.frame_count += 1
         
         # Run detection
-        results = self.detector.predict(cv_image, verbose=False)
+        results = self.detector.predict(cv_image)
 
         # Convert results to ROS messages
         detection_array_msg = Detection2DArray()

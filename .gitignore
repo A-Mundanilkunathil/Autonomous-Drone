@@ -6,3 +6,4 @@ venv/
 *.pt
 .vscode/
 *.png
+mobileclip_blt.ts
