@@ -26,8 +26,8 @@ sudo apt install ros-jazzy-image-view
 ros2 run image_view image_view --ros-args -r image:=/camera/image_raw
 
 # View detection images
-python ros_ws/perception/test/detection_viewer.py
+python ros_ws/perception/tests/detection_viewer.py
 
 # View depth
-python ros_ws/perception/test/depth_viewer.py
+python ros_ws/perception/tests/depth_viewer.py
 ```

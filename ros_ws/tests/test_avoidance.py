@@ -1,7 +1,7 @@
 import sys
 import os
 import rclpy
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../ros_ws')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from node_interface import AutonomousDroneNode
 
 def main(args=None):

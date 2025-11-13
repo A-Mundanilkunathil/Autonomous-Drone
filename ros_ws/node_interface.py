@@ -388,7 +388,7 @@ class AutonomousDroneNode(Node):
         
         if landed:
             self.get_logger().info('Landed successfully')
-            self._sleep_nonblocking(5.0, rate_hz=self._blocking_rate_hz)
+            self._sleep_nonblocking(6.0, rate_hz=self._blocking_rate_hz)
             self.mavros_srvs.arm(False)
             return True
         else:
