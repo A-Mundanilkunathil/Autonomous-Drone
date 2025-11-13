@@ -9,6 +9,10 @@
   
 - For real hardware
   ```
+  # Check the USB port
+  ls /dev/ttyUSB* /dev/ttyACM*
+
+  # Connect to the flight controller
   ros2 run mavros mavros_node --ros-args \
   -p fcu_url:=/dev/ttyUSB0:57600 \
   -p tgt_system:=1 \
