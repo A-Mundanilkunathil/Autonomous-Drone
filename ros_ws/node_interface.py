@@ -191,13 +191,13 @@ class AutonomousDroneNode(Node):
             self.get_logger().error('Failed to set GUIDED mode')
             return False
         
-        self._sleep_nonblocking(1.0, rate_hz=self._blocking_rate_hz)
+        self._sleep_nonblocking(3.0, rate_hz=self._blocking_rate_hz)
 
         if not self.mavros_srvs.arm(True):
             self.get_logger().error('Failed to arm drone')
             return False
         
-        self._sleep_nonblocking(1.0, rate_hz=self._blocking_rate_hz)
+        self._sleep_nonblocking(3.0, rate_hz=self._blocking_rate_hz)
 
         if not self.mavros_srvs.takeoff(altitude):
             self.get_logger().error('Failed to send takeoff command')
