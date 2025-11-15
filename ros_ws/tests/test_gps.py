@@ -17,7 +17,8 @@ def main(args=None):
         node.get_logger().info('MAVROS connected.')
         node.mavros_srvs.set_home()
         
-        if node.arm_and_takeoff(altitude=2.0, timeout=60.0):
+        if node.arm_and_takeoff(altitude=3.0, timeout=60.0):
+            node.move_circle_global(radius_m=1.0, altitude_m=3.0, speed_m_s=1.0, duration_s=10.0)
             current_lat, current_lon, _ = node.mavros_subs.get_global_position()
             current_alt = node.mavros_subs.get_relative_altitude()
             print(f"Current GPS position: lat={current_lat}, lon={current_lon}, alt={current_alt}")

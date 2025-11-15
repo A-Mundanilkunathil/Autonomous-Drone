@@ -24,7 +24,7 @@ class MavrosServices:
 
         node.get_logger().info('MAVROS Services initialized.')
 
-    def arm(self, value: bool = True, timeout_sec=5.0) -> bool:
+    def arm(self, value: bool = True, timeout_sec=15.0) -> bool:
         """
         Arm or disarm the drone
         
@@ -86,7 +86,7 @@ class MavrosServices:
         self.node.get_logger().error(f'Failed to send mode {mode} command.')
         return False
     
-    def takeoff(self, altitude: float, timeout_sec=5.0) -> bool:
+    def takeoff(self, altitude: float, timeout_sec=15.0) -> bool:
         """
         Command the drone to take off to a specified altitude
         
