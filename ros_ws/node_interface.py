@@ -2,6 +2,7 @@ import rclpy
 from rclpy.node import Node
 from publishers import MavrosPublishers
 from subscribers import MavrosSubscribers
+from perception.perception_subs import PerceptionSubscribers
 from services import MavrosServices
 from enum import Enum, auto
 import time
@@ -21,6 +22,7 @@ class AutonomousDroneNode(Node):
 
         self.mavros_pubs = MavrosPublishers(self)
         self.mavros_subs = MavrosSubscribers(self)
+        self.perception_subs = PerceptionSubscribers(self)
         self.mavros_srvs = MavrosServices(self)
 
         # Arbitration tunables
@@ -67,7 +69,7 @@ class AutonomousDroneNode(Node):
         Mission controls vx; avoidance controls vy/vz only
         Keep moving forward even during avoidance!
         """
-        avoidance_cmd = self.mavros_subs.get_avoidance_cmd()
+        avoidance_cmd = self.perception_subs.get_avoidance_cmd()
         if avoidance_cmd is None:
             return mission_vx, 0.0, 0.0, 0.0
         
@@ -83,8 +85,8 @@ class AutonomousDroneNode(Node):
         if not self.mavros_subs.is_connected():
             return
         
-        # Get avoidance data from subscribers
-        forward_clear = self.mavros_subs.get_forward_clearance()
+        # Get avoidance data from perception subscribers
+        forward_clear = self.perception_subs.get_forward_clearance()
         
         # ------ STATE TRANSITIONS ------
         if self.state == DroneState.IDLE:
@@ -95,7 +97,7 @@ class AutonomousDroneNode(Node):
                 self.state = DroneState.AVOID
 
         elif self.state == DroneState.AVOID:
-            if forward_clear > self.avoid_exit_clear and not self.mavros_subs.is_avoidance_requesting(self.avoid_eps):
+            if forward_clear > self.avoid_exit_clear and not self.perception_subs.is_avoidance_requesting(self.avoid_eps):
                 self.state = DroneState.MISSION
 
         # ------ STATE ACTIONS ------
@@ -108,7 +110,7 @@ class AutonomousDroneNode(Node):
         
         elif self.state == DroneState.AVOID:
             vx_mission = self._vx_from_clear(forward_clear)
-            if self.mavros_subs.is_avoidance_fresh(self.fresh_age_s):
+            if self.perception_subs.is_avoidance_fresh(self.fresh_age_s):
                 vx, vy, vz, yaw_rate = self._blend(vx_mission)
             else:
                 vx = vx_mission
