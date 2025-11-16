@@ -6,6 +6,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
 from sensor_msgs.msg import NavSatFix, Imu
 from geometry_msgs.msg import PoseStamped, TwistStamped
+from nav_msgs.msg import Odometry
 from mavros_msgs.msg import State, HomePosition
 from mavros_msgs.msg import Altitude
 
@@ -16,6 +17,7 @@ class MavrosSubscribers:
         # Store latest data
         self.current_state = None
         self.local_position = None
+        self.global_position_local = None
         self.velocity = None
         self.gps_fix = None
         self.home = None
@@ -45,6 +47,14 @@ class MavrosSubscribers:
             qos_profile  
         )
         
+        # Subscribe to global position local 
+        self.global_pos_local_sub = node.create_subscription(
+            Odometry,
+            '/mavros/global_position/local',
+            self._global_pos_local_callback,
+            qos_profile
+        )
+        
         # Subscribe to velocity
         self.velocity_sub = node.create_subscription(
             TwistStamped,
@@ -62,7 +72,7 @@ class MavrosSubscribers:
         )
 
         # Subscribe to altitude
-        self.altitude_sub = node.create_subsription(
+        self.altitude_sub = node.create_subscription(
             Altitude,
             '/mavros/altitude',
             self._altitude_callback,
@@ -101,6 +111,10 @@ class MavrosSubscribers:
     def _local_pos_callback(self, msg: PoseStamped):
         """Position updates (NED frame)"""
         self.local_position = msg
+
+    def _global_pos_local_callback(self, msg: Odometry):
+        """Global position local updates (more accurate altitude)"""
+        self.global_position_local = msg
 
     def _velocity_callback(self, msg: TwistStamped):
         """Velocity updates (NED frame)"""
@@ -160,6 +174,12 @@ class MavrosSubscribers:
         """
         if self.altitude:
             return self.altitude.relative
+        # Fallback to global position local z 
+        if self.global_position_local:
+            return abs(self.global_position_local.pose.pose.position.z)
+        # Fallback to local position z if global position not available
+        if self.local_position:
+            return abs(self.local_position.pose.position.z)
         return 0.0
     
     def get_home_position(self) -> tuple:
