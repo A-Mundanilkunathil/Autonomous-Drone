@@ -4,8 +4,6 @@ from publishers import MavrosPublishers
 from subscribers import MavrosSubscribers
 from services import MavrosServices
 from enum import Enum, auto
-from geometry_msgs.msg import TwistStamped
-from std_msgs.msg import Float32
 import time
 import math
 
@@ -24,27 +22,6 @@ class AutonomousDroneNode(Node):
         self.mavros_pubs = MavrosPublishers(self)
         self.mavros_subs = MavrosSubscribers(self)
         self.mavros_srvs = MavrosServices(self)
-
-        # Avoidance input buffer
-        self._avoid_cmd = TwistStamped()
-        self._avoid_stamp = 0.0
-        self._forward_clear_m = math.inf
-
-        # Subscribe to avoidance velocity command
-        self.create_subscription(
-            TwistStamped,
-            '/avoidance/cmd_vel',
-            self._avoidance_callback,
-            qos_profile=1
-        )
-
-        # Subscribe to forward clearance distance
-        self.create_subscription(
-            Float32,
-            '/avoidance/forward_clearance',
-            self._clearance_callback,
-            qos_profile=1
-        )
 
         # Arbitration tunables
         self.avoid_enter_clear = 0.8  # engage avoidance when clearance < this 
@@ -71,29 +48,6 @@ class AutonomousDroneNode(Node):
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(dt)
 
-    def _avoidance_callback(self, msg: TwistStamped):
-        """Receive avoidance velocity commands"""
-        self._avoid_cmd = msg
-        self._avoid_stamp = time.monotonic()
-
-    def _clearance_callback(self, msg: Float32):
-        try:
-            fc = float(msg.data)
-            if math.isnan(fc) or math.isinf(fc):
-                self._forward_clear_m = math.inf
-            else:
-                self._forward_clear_m = fc
-        except Exception as e:
-            self._forward_clear_m = math.inf
-            self.get_logger().warn(f'Clearance callback error: {e}')
-    
-    def _avoid_fresh(self) -> bool:
-        return (time.monotonic() - self._avoid_stamp) < self.fresh_age_s
-    
-    def _avoid_requesting(self) -> bool:
-        av = self._avoid_cmd.twist.linear
-        return (abs(av.y) > self.avoid_eps) or (abs(av.z) > self.avoid_eps)
-
     def _vx_from_clear(self, fc: float) -> float:
         stop = 0.5
         caut = 0.8
@@ -113,7 +67,11 @@ class AutonomousDroneNode(Node):
         Mission controls vx; avoidance controls vy/vz only
         Keep moving forward even during avoidance!
         """
-        av = self._avoid_cmd.twist.linear
+        avoidance_cmd = self.mavros_subs.get_avoidance_cmd()
+        if avoidance_cmd is None:
+            return mission_vx, 0.0, 0.0, 0.0
+        
+        av = avoidance_cmd.twist.linear
         vx = mission_vx  # Use calculated forward speed (don't hard cap anymore)
         vy = float(av.y)  # Avoidance controls lateral
         vz = float(av.z)  # Avoidance controls vertical
@@ -125,29 +83,32 @@ class AutonomousDroneNode(Node):
         if not self.mavros_subs.is_connected():
             return
         
+        # Get avoidance data from subscribers
+        forward_clear = self.mavros_subs.get_forward_clearance()
+        
         # ------ STATE TRANSITIONS ------
         if self.state == DroneState.IDLE:
             pass
 
         elif self.state == DroneState.MISSION:
-            if self._forward_clear_m < self.avoid_enter_clear:
+            if forward_clear < self.avoid_enter_clear:
                 self.state = DroneState.AVOID
 
         elif self.state == DroneState.AVOID:
-            if self._forward_clear_m > self.avoid_exit_clear and not self._avoid_requesting():
+            if forward_clear > self.avoid_exit_clear and not self.mavros_subs.is_avoidance_requesting(self.avoid_eps):
                 self.state = DroneState.MISSION
 
         # ------ STATE ACTIONS ------
         if self.state == DroneState.MISSION:
-            vx = self._vx_from_clear(self._forward_clear_m)
+            vx = self._vx_from_clear(forward_clear)
             vy = 0.0
             vz = 0.0
             yaw_rate = 0.0
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
         
         elif self.state == DroneState.AVOID:
-            vx_mission = self._vx_from_clear(self._forward_clear_m)
-            if self._avoid_fresh():
+            vx_mission = self._vx_from_clear(forward_clear)
+            if self.mavros_subs.is_avoidance_fresh(self.fresh_age_s):
                 vx, vy, vz, yaw_rate = self._blend(vx_mission)
             else:
                 vx = vx_mission
