@@ -214,8 +214,7 @@ class AutonomousDroneNode(Node):
         dt = 1.0 / rate_hz
         
         while time.monotonic() < deadline:
-            pos = self.mavros_subs.get_position()
-            current_alt = abs(pos[2])  
+            current_alt = abs(self.mavros_subs.get_relative_altitude())  
             
             now = time.monotonic()
             if (now - last_log) >= log_interval:
@@ -372,8 +371,7 @@ class AutonomousDroneNode(Node):
         dt = 1.0 / rate_hz
         
         while time.monotonic() < deadline:
-            pos = self.mavros_subs.get_position()
-            current_alt = abs(pos[2]) 
+            current_alt = abs(self.mavros_subs.get_relative_altitude())  
             
             now = time.monotonic()
             if (now - last_log) >= log_interval:

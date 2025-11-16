@@ -7,6 +7,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPo
 from sensor_msgs.msg import NavSatFix, Imu
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from mavros_msgs.msg import State, HomePosition
+from mavros_msgs.msg import Altitude
 
 class MavrosSubscribers:
     def __init__(self, node: Node):
@@ -18,6 +19,7 @@ class MavrosSubscribers:
         self.velocity = None
         self.gps_fix = None
         self.home = None
+        self.altitude = None
 
         # QoS profile
         qos_profile = QoSProfile(
@@ -56,6 +58,14 @@ class MavrosSubscribers:
             NavSatFix,
             '/mavros/global_position/global',
             self._gps_callback,
+            qos_profile
+        )
+
+        # Subscribe to altitude
+        self.altitude_sub = node.create_subsription(
+            Altitude,
+            '/mavros/altitude',
+            self._altitude_callback,
             qos_profile
         )
 
@@ -99,6 +109,9 @@ class MavrosSubscribers:
     def _gps_callback(self, msg: NavSatFix):
         """Receives GPS fix"""
         self.gps_fix = msg
+
+    def _altitude_callback(self, msg: Altitude):
+        self.altitude = msg
 
     def _home_callback(self, msg: HomePosition):
         """Receives home position"""
@@ -145,8 +158,8 @@ class MavrosSubscribers:
         Get current altitude relative to home position.
         Returns: altitude in meters relative to home
         """
-        if self.local_position:
-            return self.local_position.pose.position.z  
+        if self.altitude:
+            return self.altitude.relative
         return 0.0
     
     def get_home_position(self) -> tuple:
