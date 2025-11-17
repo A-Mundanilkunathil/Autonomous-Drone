@@ -13,6 +13,7 @@ class DroneState(Enum):
     TAKEOFF = auto()
     MISSION = auto()
     AVOID = auto()
+    FOLLOW = auto()
     RTL = auto()
     LAND = auto()
 
@@ -99,6 +100,13 @@ class AutonomousDroneNode(Node):
         elif self.state == DroneState.AVOID:
             if forward_clear > self.avoid_exit_clear and not self.perception_subs.is_avoidance_requesting(self.avoid_eps):
                 self.state = DroneState.MISSION
+        
+        elif self.state == DroneState.FOLLOW:
+            if forward_clear < self.avoid_enter_clear:
+                self.state = DroneState.AVOID
+            elif not self.perception_subs.has_target():
+                self.get_logger().info('Target lost, returning to IDLE')
+                self.state = DroneState.IDLE
 
         # ------ STATE ACTIONS ------
         if self.state == DroneState.MISSION:
@@ -118,6 +126,30 @@ class AutonomousDroneNode(Node):
                 vz = 0.0
                 yaw_rate = 0.0
             self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+        
+        elif self.state == DroneState.FOLLOW:
+            following_cmd = self.perception_subs.get_following_cmd()
+            if following_cmd is not None and self.perception_subs.is_following_fresh(1.0):
+                fol = following_cmd.twist
+                
+                # Gate vx by clearance
+                fc = self.perception_subs.get_forward_clearance()
+                vx_limit = self._vx_from_clear(fc)
+                vx_cmd = float(fol.linear.x)
+                vx = max(-vx_limit, min(vx_cmd, vx_limit))
+                
+                # Avoidance overrides vy/vz if fresh
+                vy = float(fol.linear.y)
+                vz = float(fol.linear.z)
+                if self.perception_subs.is_avoidance_fresh(self.fresh_age_s):
+                    av = self.perception_subs.get_avoidance_cmd().twist.linear
+                    vy = float(av.y)
+                    vz = float(av.z)
+                
+                yaw_rate = float(fol.angular.z)
+                self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+            else:
+                self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
 
         elif self.state == DroneState.TAKEOFF:
             pass
@@ -134,6 +166,16 @@ class AutonomousDroneNode(Node):
         """Stop autonomous mission, return to idle"""
         self.state = DroneState.IDLE
         self.get_logger().info('Mission mode stopped')
+    
+    def start_follow(self):
+        """Enable object following mode"""
+        self.state = DroneState.FOLLOW
+        self.get_logger().info('Follow mode started')
+    
+    def stop_follow(self):
+        """Stop object following, return to idle"""
+        self.state = DroneState.IDLE
+        self.get_logger().info('Follow mode stopped')
 
     def arm_and_takeoff(self, altitude: float, timeout: float = 30.0) -> bool:
         """

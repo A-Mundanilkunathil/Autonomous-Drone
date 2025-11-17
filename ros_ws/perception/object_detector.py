@@ -113,18 +113,9 @@ class ObjectDetectorNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = ObjectDetectorNode()
-    
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.get_logger().info(
-            f'Shutting down - Processed {node.frame_count} frames, '
-            f'{node.detection_count} total detections'
-        )
-        node.destroy_node()
-        rclpy.shutdown()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()
