@@ -3,19 +3,25 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from vision_msgs.msg import Detection2DArray
 from geometry_msgs.msg import TwistStamped
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float32
+from sensor_msgs.msg import Image
+from cv_bridge import CvBridge
 import time
 import math
+import numpy as np
 
 class ObjectFollowingNode(Node):
     def __init__(self):
         super().__init__('object_following')
+        self.bridge = CvBridge()
 
         # Following parameters
         self.follow_target_label = 'person'
-        self.follow_desired_area = 0.06
+        self.follow_desired_area = 0.06  # ~3-4m with area-based fallback
+        self.follow_desired_distance = 3.0  # 3m target distance for depth-based control
         self.follow_area_band = 0.02
-        self.k_vx = 1.2
+        self.k_vx = 1.2  # Proportional gain for distance
+        self.k_vx_d = 0.3  # Derivative gain for distance (velocity prediction)
         self.k_vy = 0.8
         self.k_vz = 0.8
         self.k_yaw = 35.0
@@ -28,11 +34,37 @@ class ObjectFollowingNode(Node):
         
         self.img_width = 640
         self.img_height = 480
+        
+        # MiDaS depth calibration (convert inverse depth → metric depth)
+        self.midas_scale = 200.0  # Default if no calibration file (matches avoidance)
+        self.midas_shift = 0.0
+        self.midas_max_dist = 50.0  # Max valid distance in meters
+        
+        # Load MiDaS calibration if provided
+        midas_calib_path = self.declare_parameter('midas_calib_npz', '').value
+        if midas_calib_path:
+            try:
+                midas_calib = np.load(midas_calib_path)
+                self.midas_scale = float(midas_calib['scale'])
+                self.midas_shift = float(midas_calib['shift'])
+                self.get_logger().info(f'Loaded MiDaS calibration: scale={self.midas_scale:.3f}, shift={self.midas_shift:.3f}')
+            except Exception as e:
+                self.get_logger().warn(f'Failed to load MiDaS calibration: {e}. Using defaults.')
 
         # Detection state
         self._last_det_time = 0.0
         self._last_det_bbox = None
         self._last_det_score = 0.0
+        
+        # Depth-based distance tracking for derivative control
+        self._latest_depth_map = None
+        self._depth_timestamp = 0.0
+        self._prev_distance = None
+        self._prev_distance_time = None
+        
+        # Dynamic setpoint (adjusted based on clearance)
+        self._forward_clearance = float('inf')
+        self._clearance_timestamp = 0.0
 
         # Fixed rate timer for publishing
         self._rate_hz = 20.0
@@ -57,6 +89,22 @@ class ObjectFollowingNode(Node):
             self._detection_callback,
             qos_profile=qos_input
         )
+        
+        # Subscribe to depth map for distance estimation
+        self.depth_sub = self.create_subscription(
+            Image,
+            '/camera/depth_map',
+            self._depth_callback,
+            qos_profile=qos_input
+        )
+        
+        # Subscribe to forward clearance for dynamic setpoint
+        self.clearance_sub = self.create_subscription(
+            Float32,
+            '/avoidance/forward_clearance',
+            self._clearance_callback,
+            qos_profile=qos_input
+        )
 
         # Publish following commands
         self.cmd_pub = self.create_publisher(
@@ -71,6 +119,24 @@ class ObjectFollowingNode(Node):
         )
 
         self.get_logger().info(f'Object following node started. Target: {self.follow_target_label}')
+
+    def _depth_callback(self, msg: Image):
+        """Store latest depth map for distance estimation"""
+        try:
+            self._latest_depth_map = msg
+            self._depth_timestamp = time.monotonic()
+        except Exception as e:
+            self.get_logger().warn(f'Depth callback error: {e}')
+    
+    def _clearance_callback(self, msg: Float32):
+        """Store forward clearance for dynamic setpoint adjustment"""
+        try:
+            fc = float(msg.data)
+            if not (math.isnan(fc) or math.isinf(fc)):
+                self._forward_clearance = fc
+                self._clearance_timestamp = time.monotonic()
+        except Exception as e:
+            self.get_logger().warn(f'Clearance callback error: {e}')
 
     def _detection_callback(self, msg: Detection2DArray):
         # Find best matching target
@@ -120,9 +186,86 @@ class ObjectFollowingNode(Node):
 
     def _saturate(self, x, lo, hi):
         return max(lo, min(x, hi))
+    
+    def _get_depth_at_bbox(self, cx, cy, bw, bh) -> float:
+        """Extract depth value at the center of the bounding box"""
+        if self._latest_depth_map is None:
+            return None
+        if (time.monotonic() - self._depth_timestamp) > 0.5:
+            return None  # Depth too old
+            
+        try:
+            # Decode depth image using CvBridge (matches avoidance)
+            inverse_depth_array = self.bridge.imgmsg_to_cv2(self._latest_depth_map, desired_encoding='32FC1')
+            height, width = inverse_depth_array.shape[:2]
+            
+            # Get bbox center pixel coordinates
+            center_x = int((cx / self.img_width) * width)
+            center_y = int((cy / self.img_height) * height)
+            
+            # Clamp to valid range
+            center_x = max(0, min(width - 1, center_x))
+            center_y = max(0, min(height - 1, center_y))
+            
+            # Extract inverse depth at center (average 5x5 region for robustness)
+            y_start = max(0, center_y - 2)
+            y_end = min(height, center_y + 3)
+            x_start = max(0, center_x - 2)
+            x_end = min(width, center_x + 3)
+            
+            inv_depth_region = inverse_depth_array[y_start:y_end, x_start:x_end]
+            
+            # Filter out invalid inverse depths
+            valid_inv_depths = inv_depth_region[(inv_depth_region > 0.1) & 
+                                                ~np.isnan(inv_depth_region) & 
+                                                ~np.isinf(inv_depth_region)]
+            
+            if len(valid_inv_depths) > 0:
+                # Use median inverse depth for robustness
+                median_inv_depth = float(np.median(valid_inv_depths))
+                
+                # Convert inverse depth to metric depth: depth = scale / inv_depth
+                metric_depth = self.midas_scale / median_inv_depth
+                
+                # Apply shift if configured (matches avoidance logic)
+                if self.midas_shift != 0.0:
+                    metric_depth += self.midas_shift
+                
+                # Sanity check: reject unrealistic distances
+                if 0.3 < metric_depth < self.midas_max_dist:
+                    return metric_depth
+                else:
+                    return None
+            else:
+                return None
+        except Exception as e:
+            self.get_logger().warn(f'Depth extraction error: {e}')
+            return None
+    
+    def _get_dynamic_setpoint(self) -> float:
+        """Calculate dynamic distance setpoint based on forward clearance"""
+        # If clearance is fresh (< 0.5s old), use it to adjust setpoint
+        if (time.monotonic() - self._clearance_timestamp) < 0.5:
+            clearance = self._forward_clearance
+            
+            # In tight spaces (< 2m clearance), maintain closer distance
+            if clearance < 2.0:
+                return max(1.5, clearance * 0.6)  # 60% of clearance, min 1.5m
+            # In open spaces (> 5m clearance), can maintain farther distance
+            elif clearance > 5.0:
+                return 4.0  # Max 4m
+            # Normal range (2-5m clearance): scale linearly
+            else:
+                return 2.0 + (clearance - 2.0) * (2.0 / 3.0)  # 2m to 4m
+        
+        # No fresh clearance data, use default
+        return self.follow_desired_distance
 
     def _compute_follow_cmd(self):
         if not self._has_fresh_detection():
+            # Reset derivative tracking when target is lost
+            self._prev_distance = None
+            self._prev_distance_time = None
             return False, 0.0, 0.0, 0.0, 0.0
         
         meas = self._get_follow_measurements()
@@ -130,10 +273,58 @@ class ObjectFollowingNode(Node):
             return False, 0.0, 0.0, 0.0, 0.0
 
         ex, ey, area = meas
+        
+        # Try to get depth-based distance for more accurate control
+        cx, cy, bw, bh = self._last_det_bbox
+        depth_distance = self._get_depth_at_bbox(cx, cy, bw, bh)
+        
+        # Get dynamic setpoint based on environment
+        desired_distance = self._get_dynamic_setpoint()
 
-        # Forward: based on target size
-        area_err = self.follow_desired_area - area
-        vx = self.k_vx * area_err
+        # Forward control: Use depth fusion + velocity prediction (PD control)
+        current_time = time.monotonic()
+        
+        if depth_distance is not None and depth_distance > 0.1:
+            # Depth-based control (more accurate)
+            distance_error = depth_distance - desired_distance
+            
+            # Calculate derivative term (velocity prediction)
+            derivative_term = 0.0
+            if self._prev_distance is not None and self._prev_distance_time is not None:
+                dt = current_time - self._prev_distance_time
+                if dt > 0.01:  # Avoid division by very small dt
+                    distance_rate = (depth_distance - self._prev_distance) / dt
+                    derivative_term = self.k_vx_d * distance_rate
+            
+            # PD controller: vx = -k_p * error - k_d * derivative
+            # Negative because: positive error = too far, need positive vx (forward)
+            # But distance_rate is already signed (positive = moving away)
+            vx = -self.k_vx * distance_error - derivative_term
+            
+            # Update previous measurements
+            self._prev_distance = depth_distance
+            self._prev_distance_time = current_time
+            
+            # Log occasionally for debugging
+            if not hasattr(self, '_last_log_time') or (current_time - self._last_log_time) > 2.0:
+                self.get_logger().info(
+                    f'Following: depth={depth_distance:.2f}m, target={desired_distance:.1f}m, '
+                    f'error={distance_error:.2f}m, vx={vx:.2f}m/s (PD)'
+                )
+                self._last_log_time = current_time
+        else:
+            # Fall back to area-based control when depth unavailable
+            # Scale desired area based on dynamic setpoint
+            # If desired_distance increases, desired_area should decrease (farther = smaller)
+            area_scale = (self.follow_desired_distance / desired_distance) ** 2
+            scaled_desired_area = self.follow_desired_area * area_scale
+            
+            area_err = scaled_desired_area - area
+            vx = self.k_vx * area_err
+            
+            # Reset derivative tracking
+            self._prev_distance = None
+            self._prev_distance_time = None
         
         # Prevent stalling
         if vx > 0.0:
@@ -146,9 +337,11 @@ class ObjectFollowingNode(Node):
         # Yaw: face target
         yaw_rate = self.k_yaw * ex
 
-        # Deadband to avoid jitter
-        if abs(area_err) < self.follow_area_band:
-            vx = 0.0
+        # Deadband to avoid jitter (only for area-based control)
+        if depth_distance is None:
+            area_err = (self.follow_desired_area * (self.follow_desired_distance / desired_distance) ** 2) - area
+            if abs(area_err) < self.follow_area_band:
+                vx = 0.0
         
         # Apply velocity caps
         vx = self._saturate(vx, -self.follow_vx_cap, self.follow_vx_cap)
