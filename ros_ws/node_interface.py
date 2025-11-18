@@ -26,15 +26,15 @@ class AutonomousDroneNode(Node):
         self.perception_subs = PerceptionSubscribers(self)
         self.mavros_srvs = MavrosServices(self)
 
-        # Arbitration tunables
-        self.avoid_enter_clear = 0.8  # engage avoidance when clearance < this 
-        self.avoid_exit_clear  = 1.5  # return to mission when clearance > this
-        self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
-        self.fresh_age_s       = 1.0  # how recent avoidance msg must be
+        # Arbitration parameters
+        self.avoid_enter_clear = 0.8  # meters
+        self.avoid_exit_clear  = 1.5  # meters
+        self.avoid_eps         = 0.05  # m/s
+        self.fresh_age_s       = 1.0  # seconds
 
-        # Follow mode tunables
-        self.follow_lost_timeout = 5.0  # seconds to wait before giving up on lost target
-        self._follow_target_lost_time = None  # timestamp when target was first lost
+        # Follow mode parameters
+        self.follow_lost_timeout = 5.0  # seconds
+        self._follow_target_lost_time = None
 
         # Base mission speed
         self._mission_vx = 0.6
@@ -56,6 +56,7 @@ class AutonomousDroneNode(Node):
             time.sleep(dt)
 
     def _vx_from_clear(self, fc: float) -> float:
+        """Calculate forward velocity based on obstacle clearance"""
         stop = 0.5
         caut = 0.8
         
@@ -69,31 +70,25 @@ class AutonomousDroneNode(Node):
         return self._mission_vx
 
     def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:
-        """
-        Blend mission forward velocity with avoidance lateral/vertical
-        Mission controls vx; avoidance controls vy/vz only
-        Keep moving forward even during avoidance!
-        """
+        """Blend mission forward velocity with avoidance lateral/vertical commands"""
         avoidance_cmd = self.perception_subs.get_avoidance_cmd()
         if avoidance_cmd is None:
             return mission_vx, 0.0, 0.0, 0.0
         
         av = avoidance_cmd.twist.linear
-        vx = mission_vx  # Use calculated forward speed (don't hard cap anymore)
-        vy = float(av.y)  # Avoidance controls lateral
-        vz = float(av.z)  # Avoidance controls vertical
+        vx = mission_vx
+        vy = float(av.y)
+        vz = float(av.z)
         yaw_rate = 0.0
         return vx, vy, vz, yaw_rate
 
     def control_loop(self):
-        # Check connection
         if not self.mavros_subs.is_connected():
             return
         
-        # Get avoidance data from perception subscribers
         forward_clear = self.perception_subs.get_forward_clearance()
         
-        # ------ STATE TRANSITIONS ------
+        # State transitions
         if self.state == DroneState.IDLE:
             pass
 
@@ -109,24 +104,21 @@ class AutonomousDroneNode(Node):
             if forward_clear < self.avoid_enter_clear:
                 self.state = DroneState.AVOID
             elif not self.perception_subs.has_target():
-                # Target lost - start timeout if not already started
                 if self._follow_target_lost_time is None:
                     self._follow_target_lost_time = time.monotonic()
                     self.get_logger().warn('Target lost, hovering and searching...')
                 
-                # Check if timeout exceeded
                 time_lost = time.monotonic() - self._follow_target_lost_time
                 if time_lost > self.follow_lost_timeout:
                     self.get_logger().info(f'Target lost for {time_lost:.1f}s, returning to IDLE')
                     self.state = DroneState.IDLE
                     self._follow_target_lost_time = None
             else:
-                # Target is visible - reset timeout
                 if self._follow_target_lost_time is not None:
                     self.get_logger().info('Target reacquired!')
                     self._follow_target_lost_time = None
 
-        # ------ STATE ACTIONS ------
+        # State actions
         if self.state == DroneState.MISSION:
             vx = self._vx_from_clear(forward_clear)
             vy = 0.0
@@ -150,13 +142,11 @@ class AutonomousDroneNode(Node):
             if following_cmd is not None and self.perception_subs.is_following_fresh(1.0):
                 fol = following_cmd.twist
                 
-                # Gate vx by clearance
                 fc = self.perception_subs.get_forward_clearance()
                 vx_limit = self._vx_from_clear(fc)
                 vx_cmd = float(fol.linear.x)
                 vx = max(-vx_limit, min(vx_cmd, vx_limit))
                 
-                # Avoidance overrides vy/vz if fresh
                 vy = float(fol.linear.y)
                 vz = float(fol.linear.z)
                 if self.perception_subs.is_avoidance_fresh(self.fresh_age_s):
@@ -188,26 +178,17 @@ class AutonomousDroneNode(Node):
     def start_follow(self):
         """Enable object following mode"""
         self.state = DroneState.FOLLOW
-        self._follow_target_lost_time = None  # Reset timeout when starting
+        self._follow_target_lost_time = None
         self.get_logger().info('Follow mode started')
     
     def stop_follow(self):
         """Stop object following, return to idle"""
         self.state = DroneState.IDLE
-        self._follow_target_lost_time = None  # Reset timeout when stopping
+        self._follow_target_lost_time = None
         self.get_logger().info('Follow mode stopped')
 
     def arm_and_takeoff(self, altitude: float, timeout: float = 30.0) -> bool:
-        """
-        Arm and takeoff to target altitude, waiting until reached
-        
-        Args:
-            altitude: Target altitude in meters
-            timeout: Maximum time to wait for altitude (seconds)
-        
-        Returns:
-            True if successful and altitude reached
-        """
+        """Arm and takeoff to target altitude, waiting until reached"""
         self.get_logger().info(f'Starting takeoff to {altitude}m...')
 
         self.state = DroneState.TAKEOFF
@@ -268,20 +249,7 @@ class AutonomousDroneNode(Node):
             return False
 
     def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0, yaw_rate: float = 0.0):
-        """
-        Move with velocity for specified duration
-        
-        Uses BODY frame (FLU: Forward-Left-Up convention)
-        
-        Args:
-            vx: Forward/backward velocity (m/s, positive = forward)
-            vy: Left/right velocity (m/s, positive = LEFT, negative = RIGHT)
-            vz: Up/down velocity (m/s, positive = DOWN, negative = UP)
-            duration: How long to move (seconds)
-            yaw_rate: Rotation rate (deg/s, positive = LEFT, negative = RIGHT)
-        
-        Usage: node.move_body_velocity(1.0, 0, 0, 5.0)  # Move forward 1m/s for 5s
-        """
+        """Move with velocity for specified duration (BODY frame FLU convention)"""
         deadline = time.monotonic() + duration
         rate_hz = 20.0
         dt = 1.0 / rate_hz
@@ -291,18 +259,7 @@ class AutonomousDroneNode(Node):
             self._sleep_nonblocking(dt, rate_hz=rate_hz)
         
     def goto_position(self, x: float, y: float, z: float, duration: float = 5.0):
-        """
-        Go to position and hold
-        
-        Uses ENU frame (East-North-Up)
-        
-        Args:
-            x: East position (meters)
-            y: North position (meters) 
-            z: Altitude (meters, positive = up)
-        
-        Usage: node.goto_position(10, 5, 5.0, 10.0)  # Go 10m east, 5m north, 5m altitude
-        """
+        """Go to position and hold (ENU frame)"""
         deadline = time.monotonic() + duration
         rate_hz = 20.0
         dt = 1.0 / rate_hz
@@ -327,14 +284,7 @@ class AutonomousDroneNode(Node):
         return distance
 
     def goto_gps(self, target_lat, target_lon, target_alt=None, timeout_s=90.0):
-        """
-        Go to GPS coordinates maintaining altitude, then land vertically
-        Args:
-            target_lat: Target latitude (degrees)
-            target_lon: Target longitude (degrees)
-            target_alt: Target altitude (meters, relative to home)
-            timeout_s: Maximum time to wait (seconds)
-        """
+        """Go to GPS coordinates maintaining altitude"""
         deadline = time.monotonic() + timeout_s
         rate_hz = 20.0
         dt = 1.0 / rate_hz
@@ -372,15 +322,7 @@ class AutonomousDroneNode(Node):
             self._sleep_nonblocking(dt, rate_hz=rate_hz)
             
     def land(self, timeout: float = 60.0) -> bool:
-        """
-        Command the drone to land and wait until on ground
-        
-        Args:
-            timeout: Maximum time to wait for landing (seconds)
-        
-        Returns:
-            True if successfully landed
-        """
+        """Command the drone to land and wait until on ground"""
         self.get_logger().info('Starting landing sequence...')
         
         if not self.mavros_srvs.land():
@@ -419,9 +361,7 @@ class AutonomousDroneNode(Node):
             return False
         
     def hover(self, duration: float = 5.0):
-        """
-        Hover in place for specified duration
-        """
+        """Hover in place for specified duration"""
         self.get_logger().info(f'Hovering for {duration}s...')
         deadline = time.monotonic() + duration
         rate_hz = 20.0
