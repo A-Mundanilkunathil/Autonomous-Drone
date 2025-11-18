@@ -16,7 +16,7 @@ class ObjectFollowingNode(Node):
         self.bridge = CvBridge()
 
         # Following parameters
-        self.follow_target_label = 'shelf'
+        self.follow_target_label = 'car'
         self.follow_desired_area = 0.06  # ~3-4m with area-based fallback
         self.follow_desired_distance = 3.0  # 3m target distance for depth-based control
         self.follow_area_band = 0.02
