@@ -73,7 +73,7 @@ class ObjectDetectorNode(Node):
         self.frame_count += 1
         
         # Run detection
-        results = self.detector.predict(cv_image)
+        results = self.detector.predict(cv_image, conf=0.01)
 
         # Convert results to ROS messages
         detection_array_msg = Detection2DArray()

@@ -65,13 +65,24 @@ ros2 run autonomous_drone node_interface
 
 ### Launch All Nodes
 
-**For simulation:**
+**For simulation (using launch script):**
 ```bash
-ros2 launch autonomous_drone autonomous_drone_sim.launch.py
+cd ~/Desktop/Autonomous-Drone/ros_ws
+./launch_drone.sh sim
 ```
 
-**For real hardware:**
+**For real hardware (using launch script):**
 ```bash
+cd ~/Desktop/Autonomous-Drone/ros_ws
+./launch_drone.sh hw
+```
+
+**Or use ros2 launch directly:**
+```bash
+# For simulation
+ros2 launch autonomous_drone autonomous_drone_sim.launch.py
+
+# For real hardware
 ros2 launch autonomous_drone autonomous_drone_hw.launch.py
 ```
 ## Run Tests

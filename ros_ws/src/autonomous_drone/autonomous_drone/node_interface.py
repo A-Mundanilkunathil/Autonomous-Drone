@@ -564,3 +564,16 @@ class AutonomousDroneNode(Node):
         """Rotate right (clockwise)"""
         self.get_logger().info(f'Rotating right at {yaw_rate}°/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=0.0, duration=duration, yaw_rate=-yaw_rate)
+def main(args=None):
+    rclpy.init(args=args)
+    node = AutonomousDroneNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+if __name__ == '__main__':
+    main()
