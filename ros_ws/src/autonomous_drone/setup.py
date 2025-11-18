@@ -14,6 +14,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('../../launch/*.py')),
         (os.path.join('share', package_name, 'config'), glob('autonomous_drone/perception/*.npz')),
+        (os.path.join('share', package_name, 'config'), glob('autonomous_drone/bridges/*.npz')),
         # Install executable scripts to lib/<package_name>/ for ROS2 discovery
         (os.path.join('lib', package_name), glob('scripts/*')),
     ],
