@@ -1,56 +1,83 @@
-**Connect flight controller to ROS2**
-- For simulation
-  ```
-  ros2 run mavros mavros_node --ros-args \
-    -p fcu_url:=udp://0.0.0.0:14550@ \
-    -p tgt_system:=1 \
-    -p tgt_component:=1
-  ```
-  
-- For real hardware
-  ```
-  # Check the USB port
-  ls /dev/ttyUSB* /dev/ttyACM*
+# Autonomous Drone ROS2 Workspace
 
-  # Connect to the flight controller
-  ros2 run mavros mavros_node --ros-args \
+## Build Package
+```bash
+cd ~/Desktop/Autonomous-Drone/ros_ws
+colcon build --packages-select autonomous_drone --symlink-install
+source install/setup.bash
+```
+
+## Connect Flight Controller to ROS2
+
+**For simulation:**
+```bash
+ros2 run mavros mavros_node --ros-args \
+  -p fcu_url:=udp://0.0.0.0:14550@ \
+  -p tgt_system:=1 \
+  -p tgt_component:=1
+```
+
+**For real hardware:**
+```bash
+# Check the USB port
+ls /dev/ttyUSB* /dev/ttyACM*
+
+# Connect to the flight controller
+ros2 run mavros mavros_node --ros-args \
   -p fcu_url:=/dev/ttyUSB0:57600 \
   -p tgt_system:=1 \
   -p tgt_component:=1
-  ```
-
-**Run camera stream**
-```
-cd ~/Desktop/Autonomous-Drone/ros_ws/bridges
-python3 udp_custom_receiver.py --ros-args \
-  -p calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/bridges/camera_calib.npz \
-  -p port:=5005 \
-  -p expected_width:=640 \
-  -p expected_height:=480
 ```
 
-**Run object detector**
+## Run Nodes
+
+### Individual Nodes
+
+**Run camera stream (simulation):**
+```bash
+ros2 run autonomous_drone sim_bridge
 ```
+
+**Run camera stream (real hardware via UDP):**
+```bash
+ros2 run autonomous_drone udp_custom_receiver
+```
+
+**Run object detector:**
+```bash
+ros2 run autonomous_drone object_detector
+```
+
+**Run object avoidance:**
+```bash
+ros2 run autonomous_drone object_avoidance
+```
+
+**Run object following:**
+```bash
+ros2 run autonomous_drone object_following
+```
+
+**Run autonomous drone interface:**
+```bash
+ros2 run autonomous_drone node_interface
+```
+
+### Launch All Nodes
+
+**For simulation:**
+```bash
+ros2 launch autonomous_drone autonomous_drone_sim.launch.py
+```
+
+**For real hardware:**
+```bash
+ros2 launch autonomous_drone autonomous_drone_hw.launch.py
+```
+## Run Tests
+```bash
 cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 "perception/object_detector.py"
-```
-
-**Run object avoidance**
-```
-cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 perception/object_avoidance.py --ros-args \
-  -p midas_calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/perception/esp32_midas_calibration.npz
-```
-
-**Run object following**
-```
-cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 perception/object_following.py --ros-args \
-  -p midas_calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/perception/esp32_midas_calibration.npz
-```
-
-**Run autonomous drone**
-```
-cd ~/Desktop/Autonomous-Drone/ros_ws
-python3 node_interface.py
+./run_test.sh follow       # Object following test
+./run_test.sh avoidance    # Obstacle avoidance test
+./run_test.sh gps          # GPS navigation test
 ```

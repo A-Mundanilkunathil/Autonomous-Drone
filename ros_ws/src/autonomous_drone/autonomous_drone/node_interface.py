@@ -1,9 +1,9 @@
 import rclpy
 from rclpy.node import Node
-from publishers import MavrosPublishers
-from subscribers import MavrosSubscribers
-from perception.perception_subs import PerceptionSubscribers
-from services import MavrosServices
+from autonomous_drone.publishers import MavrosPublishers
+from autonomous_drone.subscribers import MavrosSubscribers
+from autonomous_drone.perception.perception_subs import PerceptionSubscribers
+from autonomous_drone.services import MavrosServices
 from enum import Enum, auto
 import time
 import math

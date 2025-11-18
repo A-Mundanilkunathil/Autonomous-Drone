@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autonomous_drone.perception.object_following import main
+if __name__ == '__main__':
+    main()
