@@ -4,9 +4,10 @@
   <name>autonomous_drone</name>
   <version>1.0.0</version>
   <description>Autonomous drone with object detection, avoidance, and following capabilities</description>
-  <maintainer email="your.email@example.com">Your Name</maintainer>
+  <maintainer email="nmhieu.pham@gmail.com">Nguyen Pham</maintainer>
+  <maintainer email="aaron.mundanilkunathil@sjsu.edu">Aaron Mundanilkunathil</maintainer>
   <license>MIT</license>
-
+  
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
