@@ -1,8 +1,12 @@
+#!/usr/bin/env python3
 import sys
 import os
 import rclpy
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from node_interface import AutonomousDroneNode
+
+# Add the installed package to Python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '..', 'install', 'autonomous_drone', 'lib', 'python3.12', 'site-packages'))
+
+from autonomous_drone.node_interface import AutonomousDroneNode
 
 def main(args=None):
     rclpy.init(args=args)

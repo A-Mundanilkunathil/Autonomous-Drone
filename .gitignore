@@ -7,3 +7,6 @@ venv/
 .vscode/
 *.png
 mobileclip_blt.ts
+build/
+install/
+log/
