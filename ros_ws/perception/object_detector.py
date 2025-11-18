@@ -95,7 +95,10 @@ class ObjectDetectorNode(Node):
 
             # Class and confidence
             hypothesis = ObjectHypothesisWithPose()
-            hypothesis.hypothesis.class_id = str(int(box.cls[0]))
+            # Get class name from model's names dictionary
+            class_idx = int(box.cls[0])
+            class_name = self.detector.names.get(class_idx, str(class_idx))
+            hypothesis.hypothesis.class_id = class_name
             hypothesis.hypothesis.score = float(box.conf[0])
             det.results.append(hypothesis)
 

@@ -16,7 +16,7 @@ class ObjectFollowingNode(Node):
         self.bridge = CvBridge()
 
         # Following parameters
-        self.follow_target_label = 'person'
+        self.follow_target_label = 'shelf'
         self.follow_desired_area = 0.06  # ~3-4m with area-based fallback
         self.follow_desired_distance = 3.0  # 3m target distance for depth-based control
         self.follow_area_band = 0.02
@@ -29,7 +29,7 @@ class ObjectFollowingNode(Node):
         self.follow_vy_cap = 0.7
         self.follow_vz_cap = 0.6
         self.follow_yaw_cap = 80.0
-        self.follow_lost_timeout = 1.0
+        self.follow_lost_timeout = 10.0  # Increased for slow YOLOE inference (~7s per frame)
         self.follow_min_vx = 0.05
         
         self.img_width = 640
@@ -52,7 +52,7 @@ class ObjectFollowingNode(Node):
                 self.get_logger().warn(f'Failed to load MiDaS calibration: {e}. Using defaults.')
 
         # Detection state
-        self._last_det_time = 0.0
+        self._last_det_time = None  # Use None to indicate no detection yet
         self._last_det_bbox = None
         self._last_det_score = 0.0
         
@@ -142,6 +142,8 @@ class ObjectFollowingNode(Node):
         # Find best matching target
         best = None
         best_score = -1.0
+        num_detections = len(msg.detections)
+        matching_targets = []
 
         for det in msg.detections:
             if not det.results:
@@ -150,6 +152,10 @@ class ObjectFollowingNode(Node):
             hyp = det.results[0].hypothesis
             cls = getattr(hyp, "class_id", "")
             score = float(getattr(hyp, "score", 0.0))
+            
+            # Log all detections for debugging
+            if cls:
+                matching_targets.append(f"{cls}({score:.2f})")
             
             if cls == self.follow_target_label and score > best_score:
                 cx = det.bbox.center.position.x
@@ -165,9 +171,23 @@ class ObjectFollowingNode(Node):
             self._last_det_bbox = best
             self._last_det_score = best_score
             self._last_det_time = time.monotonic()
+            
+            # Log successful detection occasionally
+            if not hasattr(self, '_last_det_log_time') or (time.monotonic() - self._last_det_log_time) > 2.0:
+                self.get_logger().info(f'Target "{self.follow_target_label}" found! Score: {best_score:.2f}')
+                self._last_det_log_time = time.monotonic()
+        else:
+            # Log when target is not found (but not too frequently)
+            if not hasattr(self, '_last_miss_log_time') or (time.monotonic() - self._last_miss_log_time) > 2.0:
+                detected_str = ', '.join(matching_targets) if matching_targets else 'none'
+                self.get_logger().warn(
+                    f'Target "{self.follow_target_label}" not found in {num_detections} detections. '
+                    f'Detected: [{detected_str}]'
+                )
+                self._last_miss_log_time = time.monotonic()
 
     def _has_fresh_detection(self) -> bool:
-        if self._last_det_bbox is None:
+        if self._last_det_bbox is None or self._last_det_time is None:
             return False
         return (time.monotonic() - self._last_det_time) < self.follow_lost_timeout
 
@@ -263,6 +283,17 @@ class ObjectFollowingNode(Node):
 
     def _compute_follow_cmd(self):
         if not self._has_fresh_detection():
+            # Log target lost occasionally
+            if not hasattr(self, '_last_lost_log_time') or (time.monotonic() - self._last_lost_log_time) > 2.0:
+                if self._last_det_time is not None:
+                    time_since_last = time.monotonic() - self._last_det_time
+                    self.get_logger().warn(
+                        f'Target lost! Last seen {time_since_last:.2f}s ago (timeout: {self.follow_lost_timeout}s)'
+                    )
+                else:
+                    self.get_logger().warn('Target lost! No detections received yet.')
+                self._last_lost_log_time = time.monotonic()
+            
             # Reset derivative tracking when target is lost
             self._prev_distance = None
             self._prev_distance_time = None
@@ -371,6 +402,18 @@ class ObjectFollowingNode(Node):
         cmd.twist.angular.z = yaw_rate
         
         self.cmd_pub.publish(cmd)
+        
+        # Log detection status occasionally
+        if not hasattr(self, '_last_status_log_time') or (time.monotonic() - self._last_status_log_time) > 3.0:
+            if self._last_det_time is not None:
+                time_since_det = time.monotonic() - self._last_det_time
+                status = "TRACKING" if valid else f"LOST ({time_since_det:.1f}s ago)"
+                self.get_logger().info(
+                    f'Status: {status} | Cmd: vx={vx:.2f}, vy={vy:.2f}, vz={vz:.2f}, yaw={yaw_rate:.1f}'
+                )
+            else:
+                self.get_logger().info('Status: NO DETECTIONS YET | Waiting for first detection...')
+            self._last_status_log_time = time.monotonic()
 
 def main(args=None):
     rclpy.init(args=args)

@@ -32,6 +32,10 @@ class AutonomousDroneNode(Node):
         self.avoid_eps         = 0.05 # smallness of vy/vz to consider "quiet"
         self.fresh_age_s       = 1.0  # how recent avoidance msg must be
 
+        # Follow mode tunables
+        self.follow_lost_timeout = 5.0  # seconds to wait before giving up on lost target
+        self._follow_target_lost_time = None  # timestamp when target was first lost
+
         # Base mission speed
         self._mission_vx = 0.6
 
@@ -105,8 +109,22 @@ class AutonomousDroneNode(Node):
             if forward_clear < self.avoid_enter_clear:
                 self.state = DroneState.AVOID
             elif not self.perception_subs.has_target():
-                self.get_logger().info('Target lost, returning to IDLE')
-                self.state = DroneState.IDLE
+                # Target lost - start timeout if not already started
+                if self._follow_target_lost_time is None:
+                    self._follow_target_lost_time = time.monotonic()
+                    self.get_logger().warn('Target lost, hovering and searching...')
+                
+                # Check if timeout exceeded
+                time_lost = time.monotonic() - self._follow_target_lost_time
+                if time_lost > self.follow_lost_timeout:
+                    self.get_logger().info(f'Target lost for {time_lost:.1f}s, returning to IDLE')
+                    self.state = DroneState.IDLE
+                    self._follow_target_lost_time = None
+            else:
+                # Target is visible - reset timeout
+                if self._follow_target_lost_time is not None:
+                    self.get_logger().info('Target reacquired!')
+                    self._follow_target_lost_time = None
 
         # ------ STATE ACTIONS ------
         if self.state == DroneState.MISSION:
@@ -170,11 +188,13 @@ class AutonomousDroneNode(Node):
     def start_follow(self):
         """Enable object following mode"""
         self.state = DroneState.FOLLOW
+        self._follow_target_lost_time = None  # Reset timeout when starting
         self.get_logger().info('Follow mode started')
     
     def stop_follow(self):
         """Stop object following, return to idle"""
         self.state = DroneState.IDLE
+        self._follow_target_lost_time = None  # Reset timeout when stopping
         self.get_logger().info('Follow mode stopped')
 
     def arm_and_takeoff(self, altitude: float, timeout: float = 30.0) -> bool:
