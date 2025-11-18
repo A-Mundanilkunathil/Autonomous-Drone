@@ -4,7 +4,7 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
-from ultralytics import YOLOE
+from ultralytics import YOLO
 import cv2
 
 class ObjectDetectorNode(Node):
@@ -46,14 +46,12 @@ class ObjectDetectorNode(Node):
     def load_model(self):
         # Load YOLOv8s model
         try:
-            model = YOLOE('yoloe-11l-seg.pt')
-            names = ["can", "box", "shelf", "fan", "barrel", "floor"]
-            model.set_classes(names, model.get_text_pe(names))
+            model = YOLO('yolov8n.pt')
 
-            self.get_logger().info('Loaded YOLOE model')
+            self.get_logger().info('Loaded YOLOv8s model')
             return model
         except Exception as e:
-            self.get_logger().error(f'Failed to load YOLOE model: {e}')
+            self.get_logger().error(f'Failed to load YOLOv8s model: {e}')
             return None
             
     def image_callback(self, msg):
@@ -95,7 +93,10 @@ class ObjectDetectorNode(Node):
 
             # Class and confidence
             hypothesis = ObjectHypothesisWithPose()
-            hypothesis.hypothesis.class_id = str(int(box.cls[0]))
+            # Get class name from model's names dictionary
+            class_idx = int(box.cls[0])
+            class_name = self.detector.names.get(class_idx, str(class_idx))
+            hypothesis.hypothesis.class_id = class_name
             hypothesis.hypothesis.score = float(box.conf[0])
             det.results.append(hypothesis)
 
@@ -113,18 +114,9 @@ class ObjectDetectorNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = ObjectDetectorNode()
-    
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        pass
-    finally:
-        node.get_logger().info(
-            f'Shutting down - Processed {node.frame_count} frames, '
-            f'{node.detection_count} total detections'
-        )
-        node.destroy_node()
-        rclpy.shutdown()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

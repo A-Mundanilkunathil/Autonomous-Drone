@@ -42,6 +42,13 @@ python3 perception/object_avoidance.py --ros-args \
   -p midas_calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/perception/esp32_midas_calibration.npz
 ```
 
+**Run object following**
+```
+cd ~/Desktop/Autonomous-Drone/ros_ws
+python3 perception/object_following.py --ros-args \
+  -p midas_calib_npz:=/home/hp/Desktop/Autonomous-Drone/ros_ws/perception/esp32_midas_calibration.npz
+```
+
 **Run autonomous drone**
 ```
 cd ~/Desktop/Autonomous-Drone/ros_ws
