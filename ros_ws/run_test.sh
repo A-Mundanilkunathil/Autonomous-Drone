@@ -15,6 +15,7 @@ if [ $# -eq 0 ]; then
     echo "  - follow      : Test object following behavior"
     echo "  - avoidance   : Test obstacle avoidance during mission"
     echo "  - gps         : Test GPS navigation and waypoint following"
+    echo "  - gps with avoidance : Test GPS navigation with obstacle avoidance"
     echo ""
     echo "Example: $0 follow"
     exit 1
@@ -31,9 +32,12 @@ case "$1" in
     gps)
         TEST_FILE="$SCRIPT_DIR/src/autonomous_drone/tests/test_gps.py"
         ;;
+    gps_with_avoidance)
+        TEST_FILE="$SCRIPT_DIR/src/autonomous_drone/tests/test_gps_with_avoidance.py"
+        ;;
     *)
         echo "Unknown test: $1"
-        echo "Available tests: follow, avoidance, gps"
+        echo "Available tests: follow, avoidance, gps, gps_with_avoidance"
         exit 1
         ;;
 esac
