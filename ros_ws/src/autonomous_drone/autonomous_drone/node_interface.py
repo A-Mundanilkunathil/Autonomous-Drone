@@ -45,6 +45,10 @@ class AutonomousDroneNode(Node):
         self._blocking_rate_hz = 50.0
         self._control_timer = self.create_timer(1.0 / self._control_rate_hz, self.control_loop)
 
+        # Mission target (GPS)
+        self._mission_target = None  # tuple(lat, lon, alt) or None
+        self._mission_target_tolerance_m = 1.5
+
         self.get_logger().info('Autonomous Drone Node initialized.')
 
     def _sleep_nonblocking(self, seconds: float, rate_hz: float = 50.0):
@@ -81,6 +85,28 @@ class AutonomousDroneNode(Node):
         vz = float(av.z)
         yaw_rate = 0.0
         return vx, vy, vz, yaw_rate
+
+    def _get_yaw(self) -> float:
+        """Return current vehicle yaw in radians from local_position quaternion"""
+        local = self.mavros_subs.local_position
+        if not local:
+            return 0.0
+        q = local.pose.orientation
+        # Extract yaw from quaternion
+        sin_yaw = +2.0 * (q.w * q.z + q.x * q.y)
+        cos_yaw = +1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        yaw = math.atan2(sin_yaw, cos_yaw)
+        return yaw
+
+    def _bearing_to_target(self, lat1, lon1, lat2, lon2) -> float:
+        """Return bearing (radians) from point1 to point2, measured clockwise from North"""
+        phi1 = math.radians(lat1)
+        phi2 = math.radians(lat2)
+        dlon = math.radians(lon2 - lon1)
+        y = math.sin(dlon) * math.cos(phi2)
+        x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlon)
+        brng = math.atan2(y, x)
+        return brng
 
     def control_loop(self):
         if not self.mavros_subs.is_connected():
@@ -120,11 +146,63 @@ class AutonomousDroneNode(Node):
 
         # State actions
         if self.state == DroneState.MISSION:
-            vx = self._vx_from_clear(forward_clear)
-            vy = 0.0
-            vz = 0.0
-            yaw_rate = 0.0
-            self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+            # If we have an active GPS mission target, compute velocity toward it
+            if self._mission_target is not None:
+                lat_t, lon_t, alt_t = self._mission_target
+                curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
+                curr_alt = self.mavros_subs.get_relative_altitude()
+                
+                # Distance to target
+                distance = self._haversine_distance(curr_lat, curr_lon, lat_t, lon_t)
+
+                if distance < self._mission_target_tolerance_m:
+                    self.get_logger().info('Reached GPS mission target')
+                    self._mission_target = None
+                    vx = 0.0
+                    vy = 0.0
+                    vz = 0.0
+                    yaw_rate = 0.0
+                else:
+                    # Bearing to target (radians from North)
+                    bearing = self._bearing_to_target(curr_lat, curr_lon, lat_t, lon_t)
+                    
+                    # Current yaw (radians)
+                    yaw = self._get_yaw()
+                    
+                    # Align frames: convert bearing (North, CW) -> ENU azimuth (East, CCW)
+                    az_enu = (math.pi / 2) - bearing
+
+                    # Body-frame angle error (target direction - current heading)
+                    angle_to_target = az_enu - yaw
+
+                    # Normalize to [-pi, pi]
+                    angle_to_target = math.atan2(math.sin(angle_to_target), math.cos(angle_to_target))
+                    
+                    # Compute body-frame velocities
+                    vx_base = self._vx_from_clear(forward_clear)
+                    vx = vx_base * math.cos(angle_to_target)
+                    vy = vx_base * math.sin(angle_to_target)
+                    
+                    # Altitude control 
+                    vz = 0.0
+                    if alt_t is not None:
+                        alt_error = alt_t - curr_alt
+                        vz = max(-0.5, min(0.5, alt_error * 0.3))
+                    
+                    # Blend with avoidance if active
+                    if self.perception_subs.is_avoidance_fresh(self.fresh_age_s):
+                        vx, vy, vz, yaw_rate = self._blend(vx)
+                    else:
+                        yaw_rate = 0.0
+                
+                self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+            else:
+                # No GPS target, just move forward with avoidance
+                vx = self._vx_from_clear(forward_clear)
+                vy = 0.0
+                vz = 0.0
+                yaw_rate = 0.0
+                self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
         
         elif self.state == DroneState.AVOID:
             vx_mission = self._vx_from_clear(forward_clear)
@@ -170,9 +248,24 @@ class AutonomousDroneNode(Node):
         self.state = DroneState.MISSION
         self.get_logger().info('Mission mode started')
 
+    def start_mission_gps(self, lat: float, lon: float, alt: float = None, tolerance_m: float = 1.5):
+        """Start GPS mission to specific coordinates with obstacle avoidance
+        
+        Args:
+            lat: Target latitude
+            lon: Target longitude
+            alt: Target altitude (AMSL), if None maintains current altitude
+            tolerance_m: Distance tolerance to consider target reached
+        """
+        self._mission_target = (lat, lon, alt)
+        self._mission_target_tolerance_m = tolerance_m
+        self.state = DroneState.MISSION
+        self.get_logger().info(f'GPS mission started to ({lat:.6f}, {lon:.6f}, alt={alt})')
+
     def stop_mission(self):
         """Stop autonomous mission, return to idle"""
         self.state = DroneState.IDLE
+        self._mission_target = None
         self.get_logger().info('Mission mode stopped')
     
     def start_follow(self):
