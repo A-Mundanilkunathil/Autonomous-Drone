@@ -91,4 +91,5 @@ cd ~/Desktop/Autonomous-Drone/ros_ws
 ./run_test.sh follow       # Object following test
 ./run_test.sh avoidance    # Obstacle avoidance test
 ./run_test.sh gps          # GPS navigation test
+./run_test.sh gps_with_avoidance # GPS navigation with obstacle avoidance
 ```
