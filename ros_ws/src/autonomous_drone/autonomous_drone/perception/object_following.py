@@ -34,22 +34,7 @@ class ObjectFollowingNode(Node):
         
         self.img_width = 640
         self.img_height = 480
-        
-        # MiDaS depth calibration
-        self.midas_scale = 200.0
-        self.midas_shift = 0.0
-        self.midas_max_dist = 50.0
-        
-        # Load calibration file if provided
-        midas_calib_path = self.declare_parameter('midas_calib_npz', '').value
-        if midas_calib_path:
-            try:
-                midas_calib = np.load(midas_calib_path)
-                self.midas_scale = float(midas_calib['scale'])
-                self.midas_shift = float(midas_calib['shift'])
-                self.get_logger().info(f'Loaded MiDaS calibration: scale={self.midas_scale:.3f}, shift={self.midas_shift:.3f}')
-            except Exception as e:
-                self.get_logger().warn(f'Failed to load MiDaS calibration: {e}. Using defaults.')
+        self.max_dist_m = 50.0  # meters
 
         # Detection tracking
         self._last_det_time = None
@@ -187,15 +172,15 @@ class ObjectFollowingNode(Node):
         return max(lo, min(x, hi))
     
     def _get_depth_at_bbox(self, cx, cy, bw, bh) -> float:
-        """Extract metric depth at bounding box center"""
+        """Extract depth at bounding box center."""
         if self._latest_depth_map is None:
             return None
         if (time.monotonic() - self._depth_timestamp) > 0.5:
             return None
             
         try:
-            inverse_depth_array = self.bridge.imgmsg_to_cv2(self._latest_depth_map, desired_encoding='32FC1')
-            height, width = inverse_depth_array.shape[:2]
+            depth_array = self.bridge.imgmsg_to_cv2(self._latest_depth_map, desired_encoding='32FC1')
+            height, width = depth_array.shape[:2]
             
             # Convert bbox center to pixel coordinates
             center_x = int((cx / self.img_width) * width)
@@ -209,22 +194,18 @@ class ObjectFollowingNode(Node):
             x_start = max(0, center_x - 2)
             x_end = min(width, center_x + 3)
             
-            inv_depth_region = inverse_depth_array[y_start:y_end, x_start:x_end]
+            depth_region = depth_array[y_start:y_end, x_start:x_end]
             
             # Filter invalid values
-            valid_inv_depths = inv_depth_region[(inv_depth_region > 0.1) & 
-                                                ~np.isnan(inv_depth_region) & 
-                                                ~np.isinf(inv_depth_region)]
+            valid_depths = depth_region[(depth_region > 0.1) & 
+                                        (depth_region < self.max_dist_m) &
+                                        ~np.isnan(depth_region) & 
+                                        ~np.isinf(depth_region)]
             
-            if len(valid_inv_depths) > 0:
-                median_inv_depth = float(np.median(valid_inv_depths))
-                metric_depth = self.midas_scale / median_inv_depth
-                
-                if self.midas_shift != 0.0:
-                    metric_depth += self.midas_shift
-                
+            if len(valid_depths) > 0:
+                metric_depth = float(np.median(valid_depths))
                 # Sanity check
-                if 0.3 < metric_depth < self.midas_max_dist:
+                if 0.3 < metric_depth < self.max_dist_m:
                     return metric_depth
             return None
         except Exception as e:

@@ -22,6 +22,6 @@ setup(
     author='Nguyen Pham, Aaron Mundanilkunathil',
     author_email='nmhieu.pham@gmail.com, aaron.mundanilkunathil@sjsu.edu',
     description='Autonomous drone with object detection, avoidance, and following',
-    license='MIT',
+    license='GPL-3.0-or-later',
     tests_require=['pytest'],
 )

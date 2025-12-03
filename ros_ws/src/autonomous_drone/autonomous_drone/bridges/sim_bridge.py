@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from queue import Queue, Empty
 import threading
+import os
+from ament_index_python.packages import get_package_share_directory
 
 class SimBridgeNode(Node):
     def __init__(self):
@@ -27,6 +29,11 @@ class SimBridgeNode(Node):
             pass
         self.get_logger().info(f'MiDaS loaded on device: {self.device}')
         
+        # MiDaS depth calibration 
+        self.midas_scale = 140.0  
+        self.midas_shift = 0.13   
+        self._load_midas_calibration()
+        
         # Subscribe to Gazebo camera
         self.camera_subscription = self.create_subscription(
             Image,
@@ -45,7 +52,37 @@ class SimBridgeNode(Node):
         self.depth_thread = threading.Thread(target=self._depth_worker, daemon=True)
         self.depth_thread.start()
 
-        self.get_logger().info('SimBridge started: forwarding camera to /camera/image_raw and computing depth with MiDaS')
+        self.get_logger().info('SimBridge started: publishing /camera/image_raw and /camera/depth')
+
+    def _load_midas_calibration(self):
+        """Load MiDaS calibration from .npz file for metric depth conversion"""
+        try:
+            pkg_share = get_package_share_directory('autonomous_drone')
+            calib_path = os.path.join(pkg_share, 'config', 'esp32_midas_calibration.npz')
+            
+            if os.path.exists(calib_path):
+                calib = np.load(calib_path)
+                self.midas_scale = float(calib['scale'])
+                self.midas_shift = float(calib['shift'])
+                self.get_logger().info(
+                    f'Loaded MiDaS calibration: scale={self.midas_scale:.2f}, shift={self.midas_shift:.3f}'
+                )
+            else:
+                self.get_logger().warn(
+                    f'MiDaS calibration not found at {calib_path}, using defaults'
+                )
+        except Exception as e:
+            self.get_logger().warn(f'Failed to load MiDaS calibration: {e}, using defaults')
+
+    def _midas_to_metric(self, midas_depth: np.ndarray) -> np.ndarray:
+        """
+        Convert MiDaS inverse depth to metric depth in meters.
+        Formula: depth_meters = scale / midas_inverse_depth + shift
+        """
+        safe_depth = np.clip(midas_depth, 0.1, None)
+        metric_depth = self.midas_scale / safe_depth + self.midas_shift
+        metric_depth = np.clip(metric_depth, 0.1, 50.0)
+        return metric_depth.astype(np.float32)
 
     def _camera_callback(self, msg):
         try:
@@ -84,15 +121,14 @@ class SimBridgeNode(Node):
 
             frame_bgr, stamp, frame_id = item
             try:
-                # Run MiDaS inference
-                depth_map = self._run_midas(frame_bgr)
+                raw_depth = self._run_midas(frame_bgr)
+                metric_depth = self._midas_to_metric(raw_depth)
 
                 # Convert to ROS Image message with encoding '32FC1'
-                depth_msg = self.bridge.cv2_to_imgmsg(depth_map, encoding='32FC1')
+                depth_msg = self.bridge.cv2_to_imgmsg(metric_depth, encoding='32FC1')
                 depth_msg.header.stamp = stamp
                 depth_msg.header.frame_id = frame_id
                 
-                # Publish depth map
                 self.depth_publisher.publish(depth_msg)
                 
             except Exception as e:
