@@ -34,7 +34,7 @@ class ObjectAvoidanceNode(Node):
             depth=10
         )
 
-        # Subscribe to depth only - no object detector needed!
+        # Subscribe to depth only
         self.depth_sub = self.create_subscription(
             Image,
             '/camera/depth_map',
@@ -164,7 +164,7 @@ class ObjectAvoidanceNode(Node):
         x1_center = (W - center_w) // 2
         x2_center = x1_center + center_w
         
-        # Apply masks to raw image BEFORE conversion
+        # Apply masks to raw image before conversion
         depth_img_raw_masked = depth_img_raw.copy()
         
         # Mask out top 30%

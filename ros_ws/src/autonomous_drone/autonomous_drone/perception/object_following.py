@@ -188,7 +188,7 @@ class ObjectFollowingNode(Node):
             center_x = max(0, min(width - 1, center_x))
             center_y = max(0, min(height - 1, center_y))
             
-            # Sample 5x5 region for robustness
+            # Extract depth region
             y_start = max(0, center_y - 2)
             y_end = min(height, center_y + 3)
             x_start = max(0, center_x - 2)

@@ -22,16 +22,26 @@ class VSLAMNode(Node):
         self.cx = 320.0
         self.cy = 240.0
         
-        # Feature detector and tracker
+        # Feature detector and matcher
         self.orb = cv2.ORB_create(nfeatures=500)
         self.bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
         
-        # State
-        self.prev_frame = None
-        self.prev_kp = None
-        self.prev_des = None
-        self.pose = np.eye(4)  # Cumulative pose
+        # Pose state
+        self.pose = np.eye(4)  # Cumulative camera pose in world frame
         self.frame_count = 0
+        
+        # Keyframe state 
+        self.keyframe = None
+        self.keyframe_kp = None
+        self.keyframe_des = None
+        self.keyframe_pose = np.eye(4)
+        self.frames_since_keyframe = 0
+        
+        # Keyframe thresholds
+        self.min_translation_m = 0.05      # Min movement to create new keyframe
+        self.min_rotation_deg = 2.0        # Min rotation to create new keyframe  
+        self.min_pixel_displacement = 15.0 # Skip pose update if features move less
+        self.max_frames_since_keyframe = 30
         
         # QoS
         qos = QoSProfile(
@@ -83,30 +93,37 @@ class VSLAMNode(Node):
             return
         
         self.frame_count += 1
+        self.frames_since_keyframe += 1
         
         # Detect features
         kp, des = self.orb.detectAndCompute(frame, None)
         
-        if self.prev_frame is None or self.prev_des is None or des is None:
-            self.prev_frame = frame
-            self.prev_kp = kp
-            self.prev_des = des
+        # Initialize keyframe on first frame
+        if self.keyframe is None or self.keyframe_des is None or des is None:
+            self.keyframe = frame
+            self.keyframe_kp = kp
+            self.keyframe_des = des
+            self.keyframe_pose = self.pose.copy()
+            self.frames_since_keyframe = 0
             return
         
-        # Match features
-        matches = self.bf.match(self.prev_des, des)
+        # Match against keyframe
+        matches = self.bf.match(self.keyframe_des, des)
         matches = sorted(matches, key=lambda x: x.distance)[:100]
         
         if len(matches) < 8:
             self.get_logger().warn('Not enough matches for pose estimation')
-            self.prev_frame = frame
-            self.prev_kp = kp
-            self.prev_des = des
             return
         
         # Extract matched points
-        pts1 = np.float32([self.prev_kp[m.queryIdx].pt for m in matches])
+        pts1 = np.float32([self.keyframe_kp[m.queryIdx].pt for m in matches])
         pts2 = np.float32([kp[m.trainIdx].pt for m in matches])
+        
+        # Check if there's enough movement to warrant a pose update
+        avg_displacement = np.mean(np.linalg.norm(pts2 - pts1, axis=1))
+        if avg_displacement < self.min_pixel_displacement and self.frames_since_keyframe < self.max_frames_since_keyframe:
+            # Not enough movement, skip pose update 
+            return
         
         # Estimate essential matrix
         K = np.array([[self.fx, 0, self.cx],
@@ -116,12 +133,9 @@ class VSLAMNode(Node):
         E, mask = cv2.findEssentialMat(pts1, pts2, K, method=cv2.RANSAC, prob=0.999, threshold=1.0)
         
         if E is None:
-            self.prev_frame = frame
-            self.prev_kp = kp
-            self.prev_des = des
             return
         
-        # Recover pose
+        # Recover rotation and translation from essential matrix
         _, R, t, mask = cv2.recoverPose(E, pts1, pts2, K)
         
         # Scale recovery from depth (if available)
@@ -134,16 +148,28 @@ class VSLAMNode(Node):
         T[:3, :3] = R
         T[:3, 3] = (t * scale).flatten()
         
-        # Update cumulative pose
-        self.pose = self.pose @ np.linalg.inv(T)
+        # Update cumulative pose (relative to keyframe)
+        self.pose = self.keyframe_pose @ np.linalg.inv(T)
         
         # Publish pose
         self._publish_pose(msg.header.stamp)
         
-        # Update previous frame
-        self.prev_frame = frame
-        self.prev_kp = kp
-        self.prev_des = des
+        # Decide if this frame should become the new keyframe
+        translation_norm = np.linalg.norm(t * scale)
+        rotation_angle = np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1)) * 180 / np.pi
+        
+        should_update_keyframe = (
+            translation_norm > self.min_translation_m or
+            rotation_angle > self.min_rotation_deg or
+            self.frames_since_keyframe >= self.max_frames_since_keyframe
+        )
+        
+        if should_update_keyframe:
+            self.keyframe = frame
+            self.keyframe_kp = kp
+            self.keyframe_des = des
+            self.keyframe_pose = self.pose.copy()
+            self.frames_since_keyframe = 0
     
     def _estimate_scale(self, pts1, pts2, mask) -> float:
         if self.current_depth is None:
@@ -159,12 +185,8 @@ class VSLAMNode(Node):
             x1, y1 = int(p1[0]), int(p1[1])
             if 0 <= x1 < w and 0 <= y1 < h:
                 d = self.current_depth[y1, x1]
-                # Now d is in METERS (after calibration conversion)
-                if 0.2 < d < 20.0:  # Valid metric depth range (0.2m to 20m)
+                if 0.2 < d < 20.0:  
                     # Compute 3D point in camera frame
-                    # X = (u - cx) * Z / fx
-                    # Y = (v - cy) * Z / fy  
-                    # Z = d
                     Z1 = d
                     X1 = (p1[0] - self.cx) * Z1 / self.fx
                     Y1 = (p1[1] - self.cy) * Z1 / self.fy
@@ -183,10 +205,24 @@ class VSLAMNode(Node):
                             if dist_3d > 0.01:  # At least 1cm movement
                                 scales.append(dist_3d)
         
-        if len(scales) > 5:
-            # Use median for robustness against outliers
-            return float(np.median(scales))
-        return 1.0
+        if len(scales) < 5:
+            return 1.0
+        
+        # MAD-based outlier rejection 
+        scales = np.array(scales)
+        median = np.median(scales)
+        mad = np.median(np.abs(scales - median))  # Median Absolute Deviation
+        
+        if mad < 1e-6:
+            return float(median)
+        
+        # Keep only inliers within 2.5 MAD of median (~ 2 sigma for normal dist)
+        threshold = 2.5 * mad * 1.4826  # 1.4826 makes MAD consistent with std dev
+        inliers = scales[np.abs(scales - median) < threshold]
+        
+        if len(inliers) > 3:
+            return float(np.mean(inliers))  # Mean of inliers is more accurate
+        return float(median)
     
     def _publish_pose(self, stamp):
         """Publish pose as PoseStamped and Odometry"""

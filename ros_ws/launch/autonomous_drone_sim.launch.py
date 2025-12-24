@@ -54,4 +54,11 @@ def generate_launch_description():
             name='node_interface',
             output='screen'
         ),
+
+        Node(
+            package='autonomous_drone',
+            executable='vslam_node',
+            name='vslam_node',
+            output='screen',   
+        )
     ])
