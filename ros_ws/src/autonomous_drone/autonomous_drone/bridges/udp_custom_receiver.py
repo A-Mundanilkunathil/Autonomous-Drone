@@ -1,4 +1,4 @@
-import socket, struct, time, threading
+import socket, struct, time, threading, os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import torch
 from queue import Queue, Empty
+from ament_index_python.packages import get_package_share_directory
 
 # UDP packet structure
 # uint32_t: frame_id
@@ -34,6 +35,11 @@ class UdpFrameReceiver(Node):
         self.midas.to(self.device)
         try: torch.set_num_threads(1)
         except Exception: pass
+
+        # MiDaS depth calibration 
+        self.midas_scale = 140.0  
+        self.midas_shift = 0.13  
+        self._load_midas_calibration()
 
         # Parameters
         self.port = int(self.declare_parameter('port', 5005).value)
@@ -131,6 +137,36 @@ class UdpFrameReceiver(Node):
         self.timer = self.create_timer(0.5, self.flush_stale_frames)
         self.get_logger().info(f'UDP Frame Receiver initialized on {self.bind_ip}:{self.port}')
     
+    def _load_midas_calibration(self):
+        """Load MiDaS calibration from .npz file for metric depth conversion"""
+        try:
+            pkg_share = get_package_share_directory('autonomous_drone')
+            calib_path = os.path.join(pkg_share, 'config', 'esp32_midas_calibration.npz')
+            
+            if os.path.exists(calib_path):
+                calib = np.load(calib_path)
+                self.midas_scale = float(calib['scale'])
+                self.midas_shift = float(calib['shift'])
+                self.get_logger().info(
+                    f'Loaded MiDaS calibration: scale={self.midas_scale:.2f}, shift={self.midas_shift:.3f}'
+                )
+            else:
+                self.get_logger().warn(
+                    f'MiDaS calibration not found at {calib_path}, using defaults'
+                )
+        except Exception as e:
+            self.get_logger().warn(f'Failed to load MiDaS calibration: {e}, using defaults')
+
+    def _midas_to_metric(self, midas_depth: np.ndarray) -> np.ndarray:
+        """
+        Convert MiDaS inverse depth to metric depth in meters.
+        Formula: depth_meters = scale / midas_inverse_depth + shift
+        """
+        safe_depth = np.clip(midas_depth, 0.1, None)
+        metric_depth = self.midas_scale / safe_depth + self.midas_shift
+        metric_depth = np.clip(metric_depth, 0.1, 50.0)
+        return metric_depth.astype(np.float32)
+
     def load_caminfo_from_npz(self, path: str) -> CameraInfo:
         data = np.load(path)
         
@@ -326,13 +362,10 @@ class UdpFrameReceiver(Node):
 
             frame_bgr, stamp = item
             try:
-                # Run MiDaS
-                depth_map = self._run_midas(frame_bgr)
+                raw_depth = self._run_midas(frame_bgr)
+                metric_depth = self._midas_to_metric(raw_depth)
 
-                # Convert to ROS Image message with encoding '32FC1'
-                depth_msg = self.bridge.cv2_to_imgmsg(depth_map, encoding='32FC1')
-
-                # Publish
+                depth_msg = self.bridge.cv2_to_imgmsg(metric_depth, encoding='32FC1')
                 depth_msg.header.stamp = stamp
                 depth_msg.header.frame_id = self.frame_id_str
                 self.pub_depth.publish(depth_msg)

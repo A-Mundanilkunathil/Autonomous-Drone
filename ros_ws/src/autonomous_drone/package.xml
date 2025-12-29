@@ -6,7 +6,7 @@
   <description>Autonomous drone with object detection, avoidance, and following capabilities</description>
   <maintainer email="nmhieu.pham@gmail.com">Nguyen Pham</maintainer>
   <maintainer email="aaron.mundanilkunathil@sjsu.edu">Aaron Mundanilkunathil</maintainer>
-  <license>MIT</license>
+  <license>GPL-3.0-or-later</license>
   
   <depend>rclpy</depend>
   <depend>std_msgs</depend>

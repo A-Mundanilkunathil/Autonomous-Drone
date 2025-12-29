@@ -58,7 +58,7 @@ def generate_launch_description():
             parameters=[{'midas_calib_npz': midas_calib_path}]
         ),
         
-        # Main control node (state machine)
+        # Main control node 
         Node(
             package='autonomous_drone',
             executable='node_interface',

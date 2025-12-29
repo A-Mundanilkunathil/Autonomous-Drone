@@ -12,22 +12,7 @@ class ObjectAvoidanceNode(Node):
     def __init__(self):
         super().__init__('object_avoidance')
         self.bridge = CvBridge()
-
-        # MiDaS depth conversion parameters
-        self.midas_scale = 200.0
-        self.midas_max_dist = 50.0
-        self.midas_shift = 0.0
-
-        # MiDaS inverse depth calibration
-        midas_calib_path = self.declare_parameter('midas_calib_npz', '').value
-        if midas_calib_path:
-            try:
-                midas_calib = np.load(midas_calib_path)
-                self.midas_scale = midas_calib['scale']
-                self.midas_shift = midas_calib['shift']
-                self.get_logger().info('Loaded MiDaS calibration file')
-            except Exception as e:
-                self.get_logger().error(f'Failed to load MiDaS calibration file: {e}')
+        self.max_dist_m = 50.0  # meters
 
         # Avoidance configurations
         self.stop_dist_m = 0.5
@@ -49,7 +34,7 @@ class ObjectAvoidanceNode(Node):
             depth=10
         )
 
-        # Subscribe to depth only - no object detector needed!
+        # Subscribe to depth only
         self.depth_sub = self.create_subscription(
             Image,
             '/camera/depth_map',
@@ -67,23 +52,17 @@ class ObjectAvoidanceNode(Node):
 
         self.get_logger().info('Object avoidance node started')
     
-    def _convert_midas_depth(self, depth_img):
-        """Convert MiDaS inverse depth to metric depth in meters"""
-        # Mask out invalid depths
+    def _validate_depth(self, depth_img):
+        """Clamp depth to valid range and mask out invalid values."""
+        # Mask out invalid depths (too close or invalid)
         ignore_mask = depth_img < 0.1
-
-        # Prevent division by zero
-        depth_img = np.clip(depth_img, 0.1, None)
-
-        # Depth = scale / inv_depth
-        metric_depth = self.midas_scale / depth_img
-
-        if self.midas_shift != 0.0: 
-            metric_depth += self.midas_shift
-
+        
+        # Clamp to valid range
+        metric_depth = np.clip(depth_img, 0.1, self.max_dist_m)
+        
         # Mask ignored pixels as infinite depth
         metric_depth[ignore_mask] = np.inf
-        metric_depth = np.where(np.isinf(metric_depth), np.inf, np.clip(metric_depth, 0, self.midas_max_dist))
+        
         return metric_depth.astype(np.float32)
     
     def _median_ignore_nan(self, a):
@@ -185,7 +164,7 @@ class ObjectAvoidanceNode(Node):
         x1_center = (W - center_w) // 2
         x2_center = x1_center + center_w
         
-        # Apply masks to raw image BEFORE conversion
+        # Apply masks to raw image before conversion
         depth_img_raw_masked = depth_img_raw.copy()
         
         # Mask out top 30%
@@ -201,8 +180,7 @@ class ObjectAvoidanceNode(Node):
         depth_img_raw_masked[:, :edge_mask_width] = 0.0
         depth_img_raw_masked[:, W - edge_mask_width:] = 0.0
         
-        # Convert to metric depth
-        depth_img = self._convert_midas_depth(depth_img_raw_masked)
+        depth_img = self._validate_depth(depth_img_raw_masked)
         
         # Extract center ROI
         center_roi = depth_img[y1_center:y2_center, x1_center:x2_center]
