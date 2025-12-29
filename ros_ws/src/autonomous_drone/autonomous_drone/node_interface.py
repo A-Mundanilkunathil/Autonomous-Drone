@@ -114,7 +114,7 @@ class AutonomousDroneNode(Node):
         
         forward_clear = self.perception_subs.get_forward_clearance()
         
-        # State transitions
+        # =================== State transitions ===================
         if self.state == DroneState.IDLE:
             pass
 
@@ -144,7 +144,7 @@ class AutonomousDroneNode(Node):
                     self.get_logger().info('Target reacquired!')
                     self._follow_target_lost_time = None
 
-        # State actions
+        # =================== State actions ===================
         if self.state == DroneState.MISSION:
             # If we have an active GPS mission target, compute velocity toward it
             if self._mission_target is not None:
