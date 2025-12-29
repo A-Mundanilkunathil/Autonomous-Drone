@@ -1,7 +1,9 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import Image, CameraInfo, PointCloud2
+from sensor_msgs_py import point_cloud2
+from std_msgs.msg import Header
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from cv_bridge import CvBridge
@@ -61,6 +63,7 @@ class VSLAMNode(Node):
         # Publishers
         self.pose_pub = self.create_publisher(PoseStamped, '/vslam/pose', 10)
         self.odom_pub = self.create_publisher(Odometry, '/vslam/odom', 10)
+        self.map_pub = self.create_publisher(PointCloud2, '/vslam/map_points', 10)
         
         # TF broadcaster
         self.tf_broadcaster = tf2_ros.TransformBroadcaster(self)
@@ -154,6 +157,10 @@ class VSLAMNode(Node):
         # Publish pose
         self._publish_pose(msg.header.stamp)
         
+        # Publish map points
+        if self.current_depth is not None:
+            self._publish_map_points(pts2, self.current_depth, msg.header.stamp)
+        
         # Decide if this frame should become the new keyframe
         translation_norm = np.linalg.norm(t * scale)
         rotation_angle = np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1)) * 180 / np.pi
@@ -224,6 +231,36 @@ class VSLAMNode(Node):
             return float(np.mean(inliers))  # Mean of inliers is more accurate
         return float(median)
     
+    def _publish_map_points(self, pts, depth_img, stamp):
+        if depth_img is None:
+            return
+
+        points_3d = []
+        h, w = depth_img.shape
+        
+        # Convert 2D keypoints to 3D points in Camera Frame
+        for pt in pts:
+            u, v = int(pt[0]), int(pt[1])
+            if 0 <= u < w and 0 <= v < h:
+                d = depth_img[v, u]
+                if 0.2 < d < 10.0: # Valid depth range
+                    # Back-project to 3D
+                    z = float(d)
+                    x = (u - self.cx) * z / self.fx
+                    y = (v - self.cy) * z / self.fy
+                    points_3d.append([x, y, z])
+
+        if not points_3d:
+            return
+
+        # Create PointCloud2 message
+        header = Header()
+        header.stamp = stamp
+        header.frame_id = "vslam_link" # Points are in camera frame, TF handles the rest
+        
+        pc_msg = point_cloud2.create_cloud_xyz32(header, points_3d)
+        self.map_pub.publish(pc_msg)
+
     def _publish_pose(self, stamp):
         """Publish pose as PoseStamped and Odometry"""
         # Extract position and orientation from pose matrix
