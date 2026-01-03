@@ -7,6 +7,7 @@ from cv_bridge import CvBridge
 import numpy as np
 from geometry_msgs.msg import TwistStamped
 import cv2
+import time
 
 class ObjectAvoidanceNode(Node):
     def __init__(self):
@@ -49,6 +50,13 @@ class ObjectAvoidanceNode(Node):
         # Last command for smoothing (EMA) 
         self._last_vy = 0.0
         self._last_vz = 0.0
+
+        # Timer-based control
+        self._latest_depth_msg = None
+        self._last_depth_received_time = 0.0
+        self._depth_timeout = 0.5
+        self._rate_hz = 20.0
+        self._timer = self.create_timer(1.0 / self._rate_hz, self._on_timer)
 
         self.get_logger().info('Object avoidance node started')
     
@@ -152,8 +160,35 @@ class ObjectAvoidanceNode(Node):
         return vy, vz
 
     def depth_callback(self, depth_msg):
-        """Process depth image and generate avoidance commands"""
-        depth_img_raw = self.bridge.imgmsg_to_cv2(depth_msg, desired_encoding='32FC1')
+        """Store latest depth map."""
+        self._latest_depth_msg = depth_msg
+        self._last_depth_received_time = time.time()
+
+    def _on_timer(self):
+        """Process depth and publish commands at fixed rate."""
+        if self._latest_depth_msg is None:
+            return
+
+        # Check for timeout
+        if time.time() - self._last_depth_received_time > self._depth_timeout:
+            # Publish stop command
+            msg = TwistStamped()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = 'base_link'
+            self.cmd_pub.publish(msg)
+            
+            # Publish danger clearance to force stop
+            clearance_msg = Float32()
+            clearance_msg.data = 0.0
+            self.clearance_pub.publish(clearance_msg)
+            return
+
+        try:
+            depth_img_raw = self.bridge.imgmsg_to_cv2(self._latest_depth_msg, desired_encoding='32FC1')
+        except Exception as e:
+            self.get_logger().warn(f'CV Bridge error: {e}')
+            return
+
         H, W = depth_img_raw.shape[:2]
         
         # Define ROI dimensions
