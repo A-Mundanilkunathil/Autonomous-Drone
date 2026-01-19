@@ -172,14 +172,19 @@ class MavrosSubscribers:
         Get current altitude relative to home position.
         Returns: altitude in meters relative to home
         """
-        if self.altitude:
+        if self.altitude and self.altitude.relative != 0.0:
             return self.altitude.relative
+        
         # Fallback to global position local z 
         if self.global_position_local:
-            return abs(self.global_position_local.pose.pose.position.z)
+            alt = abs(self.global_position_local.pose.pose.position.z)
+            if alt != 0.0:
+                return alt
+            
         # Fallback to local position z if global position not available
         if self.local_position:
             return abs(self.local_position.pose.position.z)
+        
         return 0.0
     
     def get_home_position(self) -> tuple:
