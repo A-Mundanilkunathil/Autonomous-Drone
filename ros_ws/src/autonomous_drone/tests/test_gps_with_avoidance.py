@@ -45,11 +45,8 @@ def main(args=None):
             
             # Start GPS mission - this will navigate to the target while avoiding obstacles
             node.start_mission_gps(lat=target_lat, lon=target_lon, alt=target_alt, tolerance_m=1.5)
-            
-            # Let the mission run (control_loop handles navigation + avoidance)
-            # The mission will automatically stop when target is reached
-            node._sleep_nonblocking(90, rate_hz=50)
-            
+            node.wait_until_mission_complete_or_timeout(timeout_s=90.0)
+
             # Stop mission and return home
             node.stop_mission()
             node.get_logger().info('Mission complete, returning home...')

@@ -59,6 +59,14 @@ class AutonomousDroneNode(Node):
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(dt)
 
+    def wait_until_mission_complete_or_timeout(self, timeout_s=60.0):
+        start_time = time.monotonic()
+        while self._mission_target is not None:
+            rclpy.spin_once(self, timeout_sec=0.05)
+            if time.monotonic() - start_time > timeout_s:
+                self.get_logger().warn('GPS mission timed out!')
+                break
+
     def _vx_from_clear(self, fc: float) -> float:
         """Calculate forward velocity based on obstacle clearance"""
         stop = 0.5
