@@ -491,25 +491,32 @@ class AutonomousDroneNode(Node):
         
         lat, lon, alt = home
         self.get_logger().info(f'Home position: Lat {lat}, Lon {lon}, Alt {alt}m')
-        
+
         if smart:
-            from pymavlink import mavutil
-            master = None
-            try:
-                master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
-                master.wait_heartbeat(timeout=10)
-                self.get_logger().info('Connected via UDP (simulation)')
-            except Exception as e_udp:
-                self.get_logger().warn(f'UDP connection failed: {e_udp}. Trying serial...')
-                try:
-                    master = mavutil.mavlink_connection('/dev/ttyUSB0', baud=57600)
-                    master.wait_heartbeat(timeout=10)
-                    self.get_logger().info('Connected via serial (hardware)')
-                except Exception as e_serial:
-                    self.get_logger().error(f'Failed to connect via UDP and serial: {e_serial}')
-                    return False
-            master.set_mode(21)  # SMART_RTL
-            master.close()
+            # from pymavlink import mavutil
+            # master = None
+            # try:
+            #     master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
+            #     master.wait_heartbeat(timeout=10)
+            #     self.get_logger().info('Connected via UDP (simulation)')
+            # except Exception as e_udp:
+            #     self.get_logger().warn(f'UDP connection failed: {e_udp}. Trying serial...')
+            #     try:
+            #         master = mavutil.mavlink_connection('/dev/ttyUSB0', baud=57600)
+            #         master.wait_heartbeat(timeout=10)
+            #         self.get_logger().info('Connected via serial (hardware)')
+            #     except Exception as e_serial:
+            #         self.get_logger().error(f'Failed to connect via UDP and serial: {e_serial}')
+            #         return False
+            # master.set_mode(21)  # SMART_RTL
+            # master.close()
+            # self.get_logger().info('SMART_RTL mode activated')
+
+            if not self.mavros_srvs.set_mode('SMART_RTL'):
+                 self.get_logger().warn('SMART_RTL not successful, defaulting to RTL.')
+                 if not self.mavros_srvs.set_mode('RTL'):
+                     self.get_logger().error('Failed to set RTL mode.')
+                     return False
             self.get_logger().info('SMART_RTL mode activated')
         else:
             if not self.mavros_srvs.set_mode('RTL'):
