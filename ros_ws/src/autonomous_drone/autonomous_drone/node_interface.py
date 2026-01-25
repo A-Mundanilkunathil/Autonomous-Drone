@@ -248,8 +248,11 @@ class AutonomousDroneNode(Node):
         elif self.state == DroneState.TAKEOFF:
             pass
 
-        elif self.state in (DroneState.RTL, DroneState.LAND, DroneState.IDLE):
-            self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
+        elif self.state == DroneState.IDLE:
+             self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
+             
+        elif self.state in (DroneState.RTL, DroneState.LAND):
+            pass
 
     def start_mission(self):
         """Enable autonomous mission mode with obstacle avoidance"""
@@ -426,6 +429,8 @@ class AutonomousDroneNode(Node):
         """Command the drone to land and wait until on ground"""
         self.get_logger().info('Starting landing sequence...')
         
+        self.state = DroneState.LAND
+    
         if not self.mavros_srvs.land():
             self.get_logger().error('Land command failed')
             return False
@@ -491,32 +496,16 @@ class AutonomousDroneNode(Node):
         
         lat, lon, alt = home
         self.get_logger().info(f'Home position: Lat {lat}, Lon {lon}, Alt {alt}m')
+        
+        self.state = DroneState.RTL
 
         if smart:
-            # from pymavlink import mavutil
-            # master = None
-            # try:
-            #     master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
-            #     master.wait_heartbeat(timeout=10)
-            #     self.get_logger().info('Connected via UDP (simulation)')
-            # except Exception as e_udp:
-            #     self.get_logger().warn(f'UDP connection failed: {e_udp}. Trying serial...')
-            #     try:
-            #         master = mavutil.mavlink_connection('/dev/ttyUSB0', baud=57600)
-            #         master.wait_heartbeat(timeout=10)
-            #         self.get_logger().info('Connected via serial (hardware)')
-            #     except Exception as e_serial:
-            #         self.get_logger().error(f'Failed to connect via UDP and serial: {e_serial}')
-            #         return False
-            # master.set_mode(21)  # SMART_RTL
-            # master.close()
-            # self.get_logger().info('SMART_RTL mode activated')
-
             if not self.mavros_srvs.set_mode('SMART_RTL'):
-                 self.get_logger().warn('SMART_RTL not successful, defaulting to RTL.')
-                 if not self.mavros_srvs.set_mode('RTL'):
-                     self.get_logger().error('Failed to set RTL mode.')
-                     return False
+                self.get_logger().warn('SMART_RTL not successful, defaulting to RTL.')
+                if not self.mavros_srvs.set_mode('RTL'):
+                    self.get_logger().error('Failed to set RTL mode.')
+                    return False
+                self.get_logger().info('RTL mode activated')
             self.get_logger().info('SMART_RTL mode activated')
         else:
             if not self.mavros_srvs.set_mode('RTL'):
@@ -564,18 +553,17 @@ class AutonomousDroneNode(Node):
 
         rate_hz = 20.0
         dt = 1.0 / rate_hz
-        deadline = time.monotonic() + duration
-        angle_step = (speed / radius) * dt
+        start_time = time.monotonic()
+        deadline = start_time + duration
 
-        step = 0
         while time.monotonic() < deadline:
-            angle = step * angle_step
+            elapsed = time.monotonic() - start_time
+            angle = (speed / radius) * elapsed
             target_x = center_x + radius * math.cos(angle)
             target_y = center_y + radius * math.sin(angle)
             target_z = center_z
 
             self.goto_position(target_x, target_y, target_z, duration=dt)
-            step += 1
 
     def move_square(self, speed: float = 1.0, leg_s: float = 3.0):
         """

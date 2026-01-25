@@ -55,20 +55,19 @@ class MavrosServices:
     def set_mode(self, mode: str, timeout_sec=5.0) -> bool:
         """
         Set flight mode (GUIDED, STABILIZE, LOITER, RTL, LAND)
-        
-        Why: Different modes for different operations
-        - GUIDED: For autonomous control
-        - STABILIZE: Manual control
-        - LOITER: Hold position
-        - RTL: Return to launch
-        - LAND: Auto-land
         """
         if not self.mode_client.wait_for_service(timeout_sec=timeout_sec):
             self.node.get_logger().error('Set mode service not available.')
             return False
         
+        mode_map = {
+            'SMART_RTL': '21'
+        }
+        
+        mode_str = mode_map.get(mode, mode)
+        
         req = SetMode.Request()
-        req.custom_mode = mode
+        req.custom_mode = mode_str
 
         # Call and wait for response
         future = self.mode_client.call_async(req)

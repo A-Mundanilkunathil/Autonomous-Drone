@@ -57,7 +57,7 @@ def main(args=None):
             # Stop mission
             node.stop_mission()
             node.get_logger().info('Mission complete, returning home...')
-            node.return_to_launch(pos_tol_m=3.0, alt_tol_m=1, timeout=180.0, smart=True)
+            node.return_to_launch(pos_tol_m=3.0, alt_tol_m=1.0, timeout=180.0, smart=True)
             node.land()
             node.get_logger().info('All done!')
         else:
