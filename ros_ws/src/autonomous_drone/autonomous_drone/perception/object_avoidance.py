@@ -146,10 +146,10 @@ class ObjectAvoidanceNode(Node):
             
             if forward_clear_m <= self.stop_dist_m:
                 if max(T, B) < self.caution_dist_m:
-                    if T > B:
-                        vz = -0.3 * self.max_side_speed
-                    elif B > T:
+                    if T >= B:
                         vz = +0.3 * self.max_side_speed
+                    elif B > T:
+                        vz = -0.3 * self.max_side_speed
 
         # Smooth (EMA)
         alpha = self.smoothing

@@ -59,15 +59,15 @@ class MavrosPublishers:
     
     def publish_velocity_body(self, vx: float, vy: float, vz: float, yaw_rate: float = 0.0):
         """
-        Send velocity in BODY frame (FRD: Forward-Right-Down)
+        Send velocity in BODY frame (FLU: Forward-Left-Up)
         
         Why: Move relative to where drone is facing
-        When: Use for "move forward/right/up" commands
+        When: Use for "move forward/left/up" commands
         
         vx: forward/backward (positive = forward)
-        vy: left/right (positive = right)
-        vz: up/down (positive = down)
-        yaw_rate: rotation speed (rad/s, positive = clockwise/right)
+        vy: left/right (positive = left)
+        vz: up/down (positive = up)
+        yaw_rate: rotation speed (rad/s, positive = counter-clockwise)
         """
         msg = PositionTarget()
         msg.header.stamp = self.node.get_clock().now().to_msg()
@@ -87,8 +87,8 @@ class MavrosPublishers:
         
         # Body frame velocities 
         msg.velocity.x = vx   
-        msg.velocity.y = -vy  
-        msg.velocity.z = -vz  
+        msg.velocity.y = vy  
+        msg.velocity.z = vz  
         msg.yaw_rate = yaw_rate
         
         self.position_target_pub.publish(msg)
