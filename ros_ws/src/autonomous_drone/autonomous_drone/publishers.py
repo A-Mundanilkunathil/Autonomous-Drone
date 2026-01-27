@@ -59,24 +59,39 @@ class MavrosPublishers:
     
     def publish_velocity_body(self, vx: float, vy: float, vz: float, yaw_rate: float = 0.0):
         """
-        Send velocity in BODY frame (FLU: Forward-Left-Up convention)
+        Send velocity in BODY frame (FRD: Forward-Right-Down)
         
         Why: Move relative to where drone is facing
         When: Use for "move forward/right/up" commands
         
         vx: forward/backward (positive = forward)
-        vy: left/right (positive = LEFT, negative = RIGHT)
-        vz: up/down (positive = DOWN, negative = UP)
-        yaw_rate: rotation speed (deg/s, positive = LEFT, negative = RIGHT)
+        vy: left/right (positive = right)
+        vz: up/down (positive = down)
+        yaw_rate: rotation speed (rad/s, positive = clockwise/right)
         """
-        msg = TwistStamped()
+        msg = PositionTarget()
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
-        msg.twist.linear.x = vx
-        msg.twist.linear.y = vy
-        msg.twist.linear.z = vz
-        msg.twist.angular.z = math.radians(yaw_rate)
-        self.velocity_pub.publish(msg)
+
+        msg.coordinate_frame = PositionTarget.FRAME_BODY_OFFSET_NED
+        
+        msg.type_mask = (
+            PositionTarget.IGNORE_PX |      # bit 1
+            PositionTarget.IGNORE_PY |      # bit 2
+            PositionTarget.IGNORE_PZ |      # bit 3
+            PositionTarget.IGNORE_AFX |     # bit 7
+            PositionTarget.IGNORE_AFY |     # bit 8
+            PositionTarget.IGNORE_AFZ |     # bit 9
+            PositionTarget.IGNORE_YAW       # bit 11
+        )
+        
+        # Body frame velocities 
+        msg.velocity.x = vx   
+        msg.velocity.y = -vy  
+        msg.velocity.z = -vz  
+        msg.yaw_rate = yaw_rate
+        
+        self.position_target_pub.publish(msg)
 
     def publish_velocity_ned(self, vx: float, vy: float, vz: float):
         """

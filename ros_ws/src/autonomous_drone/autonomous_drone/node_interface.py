@@ -211,13 +211,18 @@ class AutonomousDroneNode(Node):
                     yaw_err = self._wrap_pi(az_enu - yaw)
 
                     # Yaw-rate controller
-                    k_yaw = 1.2               
+                    k_yaw = 1.5               
                     max_yaw_rate = 1.0         
                     yaw_rate = self._clamp(k_yaw * yaw_err, -max_yaw_rate, +max_yaw_rate)
 
                     vx_base = self._vx_from_clear(forward_clear)
 
-                    vx = vx_base
+                    turn_threshold_rad = math.radians(5.0)
+                    if abs(yaw_err) > turn_threshold_rad:
+                        vx = 0.0
+                    else:
+                        vx = vx_base
+
                     vy = 0.0
                     
                     # Altitude control 
