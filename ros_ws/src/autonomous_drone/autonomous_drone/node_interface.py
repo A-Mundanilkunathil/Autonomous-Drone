@@ -81,17 +81,24 @@ class AutonomousDroneNode(Node):
             return 0.20 + (self._mission_vx - 0.20) * t
         return self._mission_vx
 
-    def _blend(self, mission_vx: float) -> tuple[float, float, float, float]:
+    def _blend(self, mission_vx: float, base_yaw_rate: float = 0.0) -> tuple[float, float, float, float]:
         """Blend mission forward velocity with avoidance lateral/vertical commands"""
         avoidance_cmd = self.perception_subs.get_avoidance_cmd()
         if avoidance_cmd is None:
-            return mission_vx, 0.0, 0.0, 0.0
+            return mission_vx, 0.0, 0.0, base_yaw_rate
         
         av = avoidance_cmd.twist.linear
         vx = mission_vx
         vy = float(av.y)
         vz = float(av.z)
-        yaw_rate = 0.0
+        twist = avoidance_cmd.twist
+        yaw_rate_avoid = float(twist.angular.z)
+        
+        if abs(yaw_rate_avoid) > 1e-3:
+             yaw_rate = yaw_rate_avoid
+        else:
+             yaw_rate = base_yaw_rate
+             
         return vx, vy, vz, yaw_rate
 
     def _get_yaw(self) -> float:
@@ -115,6 +122,26 @@ class AutonomousDroneNode(Node):
         x = math.cos(phi1) * math.sin(phi2) - math.sin(phi1) * math.cos(phi2) * math.cos(dlon)
         brng = math.atan2(y, x)
         return brng
+    
+    def _wrap_pi(self, a: float) -> float:
+        """
+        Wrap angle in radians to the range [-pi, pi).
+
+        :param a: angle in radians
+        :return: wrapped angle in radians
+        """
+        return math.atan2(math.sin(a), math.cos(a))
+    
+    def _clamp(self, v: float, lo: float, hi: float) -> float:
+        """
+        Clamp a value to a given range.
+
+        :param v: value to be clamped
+        :param lo: lower bound
+        :param hi: upper bound
+        :return: clamped value
+        """
+        return max(lo, min(v, hi))
 
     def control_loop(self):
         if not self.mavros_subs.is_connected():
@@ -180,16 +207,18 @@ class AutonomousDroneNode(Node):
                     # Align frames: convert bearing (North, CW) -> ENU azimuth (East, CCW)
                     az_enu = (math.pi / 2) - bearing
 
-                    # Body-frame angle error (target direction - current heading)
-                    angle_to_target = az_enu - yaw
+                    # Body frame angle error (target - current)
+                    yaw_err = self._wrap_pi(az_enu - yaw)
 
-                    # Normalize to [-pi, pi]
-                    angle_to_target = math.atan2(math.sin(angle_to_target), math.cos(angle_to_target))
-                    
-                    # Compute body-frame velocities
+                    # Yaw-rate controller
+                    k_yaw = 1.2               
+                    max_yaw_rate = 1.0         
+                    yaw_rate = self._clamp(k_yaw * yaw_err, -max_yaw_rate, +max_yaw_rate)
+
                     vx_base = self._vx_from_clear(forward_clear)
-                    vx = vx_base * math.cos(angle_to_target)
-                    vy = vx_base * math.sin(angle_to_target)
+
+                    vx = vx_base
+                    vy = 0.0
                     
                     # Altitude control 
                     vz = 0.0
@@ -199,9 +228,7 @@ class AutonomousDroneNode(Node):
                     
                     # Blend with avoidance if active
                     if self.perception_subs.is_avoidance_fresh(self.fresh_age_s):
-                        vx, vy, vz, yaw_rate = self._blend(vx)
-                    else:
-                        yaw_rate = 0.0
+                        vx, vy, vz, yaw_rate = self._blend(vx, base_yaw_rate=yaw_rate)
                 
                 self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
             else:
