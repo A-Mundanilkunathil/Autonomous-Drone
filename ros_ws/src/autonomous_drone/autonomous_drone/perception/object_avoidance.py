@@ -18,7 +18,6 @@ class ObjectAvoidanceNode(Node):
         # Avoidance configurations
         self.stop_dist_m = 0.5
         self.caution_dist_m = 0.8
-        self.max_side_speed = 0.6
         self.min_roi_pixels = 150
         self.smoothing = 0.6
         
@@ -48,8 +47,13 @@ class ObjectAvoidanceNode(Node):
         self.clearance_pub = self.create_publisher(Float32, '/avoidance/forward_clearance', qos_output)
 
         # Last command for smoothing (EMA) 
-        self._last_vy = 0.0
+        self._last_vx = 0.0
+        self._last_wz = 0.0
         self._last_vz = 0.0
+        
+        # Speed limits
+        self.max_forward_speed = 0.5
+        self.max_yaw_rate = 0.5  # rad/s
 
         # Timer-based control
         self._latest_depth_msg = None
@@ -100,16 +104,17 @@ class ObjectAvoidanceNode(Node):
         return median_left, median_right, median_top, median_bottom
 
     def _compose_cmd(self, forward_clear_m, median_left, median_right, median_top, median_bottom, left_clearance=None, right_clearance=None):
-        """Generate lateral/vertical avoidance velocities based on clearances"""
-        vy = 0.0
+        """Generate forward/vertical/yaw avoidance velocities based on clearances"""
+        vx = 0.0
         vz = 0.0
+        wz = 0.0
         
-        if np.isnan(forward_clear_m) or forward_clear_m > self.caution_dist_m:
-            self._last_vy = 0.0
+        if np.isnan(forward_clear_m) or forward_clear_m > self.caution_dist_m: 
+            self._last_vx = 0.0
             self._last_vz = 0.0
-            return 0.0, 0.0
-        
-        # Lateral choice
+            self._last_wz = 0.0
+            return 0.0, 0.0, 0.0
+                
         if left_clearance is not None and right_clearance is not None:
             L = left_clearance if np.isfinite(left_clearance) else -np.inf
             R = right_clearance if np.isfinite(right_clearance) else -np.inf
@@ -120,24 +125,23 @@ class ObjectAvoidanceNode(Node):
             L = R = -np.inf
         
         if L > -np.inf or R > -np.inf:
-            
             if forward_clear_m <= self.stop_dist_m:
                 if L > R + 0.5:
-                    vy = +self.max_side_speed
+                    wz = +self.max_yaw_rate * 0.8  # Turn Left 
                 elif R > L + 0.2:
-                    vy = -self.max_side_speed
+                    wz = -self.max_yaw_rate * 0.8  # Turn Right 
                 else:
-                    vy = -self.max_side_speed * 0.85
+                    wz = 0.0
             else:
-                lateral_intensity = 1.0 - ((forward_clear_m - self.stop_dist_m) / (self.caution_dist_m - self.stop_dist_m))
-                lateral_intensity = max(0.6, min(1.0, lateral_intensity))
-                
+                yaw_intensity = 1.0 - ((forward_clear_m - self.stop_dist_m) / (self.caution_dist_m - self.stop_dist_m))
+                yaw_intensity = max(0.0, min(1.0, yaw_intensity))
+
                 if L > R + 0.5:
-                    vy = +lateral_intensity * self.max_side_speed
+                    wz = +self.max_yaw_rate * yaw_intensity  # Turn Left
                 elif R > L + 0.2:
-                    vy = -lateral_intensity * self.max_side_speed
+                    wz = -self.max_yaw_rate * yaw_intensity  # Turn Right
                 else:
-                    vy = -lateral_intensity * self.max_side_speed * 0.85
+                    wz = 0.0
 
         # Vertical choice
         if not np.isnan(median_top) or not np.isnan(median_bottom):
@@ -147,17 +151,21 @@ class ObjectAvoidanceNode(Node):
             if forward_clear_m <= self.stop_dist_m:
                 if max(T, B) < self.caution_dist_m:
                     if T >= B:
-                        vz = +0.3 * self.max_side_speed
+                        vz = +0.3  # Up
                     elif B > T:
-                        vz = -0.3 * self.max_side_speed
+                        vz = -0.3  # Down
 
         # Smooth (EMA)
         alpha = self.smoothing
-        vy = alpha * self._last_vy + (1 - alpha) * vy
+        vx = alpha * self._last_vx + (1 - alpha) * vx
         vz = alpha * self._last_vz + (1 - alpha) * vz
-        self._last_vy, self._last_vz = vy, vz
+        wz = alpha * self._last_wz + (1 - alpha) * wz
+        
+        self._last_vx = vx
+        self._last_vz = vz
+        self._last_wz = wz
 
-        return vy, vz
+        return vx, vz, wz
 
     def depth_callback(self, depth_msg):
         """Store latest depth map."""
@@ -179,7 +187,7 @@ class ObjectAvoidanceNode(Node):
             
             # Publish danger clearance to force stop
             clearance_msg = Float32()
-            clearance_msg.data = 0.0
+            clearance_msg.data = float('inf')
             self.clearance_pub.publish(clearance_msg)
             return
 
@@ -192,9 +200,9 @@ class ObjectAvoidanceNode(Node):
         H, W = depth_img_raw.shape[:2]
         
         # Define ROI dimensions
-        center_h = int(H * 0.40)
-        center_w = int(W * 0.60)
-        y1_center = (H - center_h) // 2
+        center_h = int(H * 0.25) # 25% of image height
+        center_w = int(W * 0.60) # 60% of image width
+        y1_center = int(H * 0.20) # Start at 20% from top
         y2_center = y1_center + center_h
         x1_center = (W - center_w) // 2
         x2_center = x1_center + center_w
@@ -250,16 +258,16 @@ class ObjectAvoidanceNode(Node):
         mL, mR, mT, mB = self._sector_scores(depth_img, y1_center, y2_center, x1_center, x2_center)
         
         # Generate avoidance command
-        vy, vz = self._compose_cmd(closest_forward, mL, mR, mT, mB, left_clearance, right_clearance)
+        vx, vz, wz = self._compose_cmd(closest_forward, mL, mR, mT, mB, left_clearance, right_clearance)
 
         # Publish velocity command
         msg = TwistStamped()
         msg.header.stamp = self.get_clock().now().to_msg()
         msg.header.frame_id = 'base_link'
-        msg.twist.linear.x = 0.0
-        msg.twist.linear.y = float(vy)
+        msg.twist.linear.x = float(vx)
+        msg.twist.linear.y = 0.0
         msg.twist.linear.z = float(vz)
-        msg.twist.angular.z = 0.0
+        msg.twist.angular.z = float(wz)
         self.cmd_pub.publish(msg)
 
         # Publish forward clearance
