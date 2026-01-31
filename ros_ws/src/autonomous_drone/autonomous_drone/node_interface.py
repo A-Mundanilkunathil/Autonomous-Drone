@@ -41,6 +41,7 @@ class AutonomousDroneNode(Node):
 
         # State & timer
         self.state = DroneState.IDLE
+        self._previous_state = DroneState.IDLE
         self._control_rate_hz = 20.0
         self._blocking_rate_hz = 50.0
         self._control_timer = self.create_timer(1.0 / self._control_rate_hz, self.control_loop)
@@ -48,6 +49,9 @@ class AutonomousDroneNode(Node):
         # Mission target (GPS)
         self._mission_target = None  # tuple(lat, lon, alt) or None
         self._mission_target_tolerance_m = 1.5
+
+        # Avoidance recovery
+        self._avoidance_exit_time = 0.0
 
         self.get_logger().info('Autonomous Drone Node initialized.')
 
@@ -155,14 +159,20 @@ class AutonomousDroneNode(Node):
 
         elif self.state == DroneState.MISSION:
             if forward_clear < self.avoid_enter_clear:
+                self._previous_state = self.state
                 self.state = DroneState.AVOID
 
         elif self.state == DroneState.AVOID:
             if forward_clear > self.avoid_exit_clear and not self.perception_subs.is_avoidance_requesting(self.avoid_eps):
-                self.state = DroneState.MISSION
+                if self._previous_state in (DroneState.MISSION, DroneState.FOLLOW):
+                    self.state = self._previous_state
+                else:
+                    self.state = DroneState.MISSION
+                self._avoidance_exit_time = time.monotonic()
         
         elif self.state == DroneState.FOLLOW:
             if forward_clear < self.avoid_enter_clear:
+                self._previous_state = self.state
                 self.state = DroneState.AVOID
             elif not self.perception_subs.has_target():
                 if self._follow_target_lost_time is None:
@@ -213,6 +223,11 @@ class AutonomousDroneNode(Node):
                     # Yaw-rate controller
                     k_yaw = 1.5               
                     max_yaw_rate = 1.0         
+
+                    # Recovery behavior: Limit turn rate after avoidance
+                    if (time.monotonic() - self._avoidance_exit_time) < 3.0:
+                        max_yaw_rate = 0.2
+                         
                     yaw_rate = self._clamp(k_yaw * yaw_err, -max_yaw_rate, +max_yaw_rate)
 
                     vx_base = self._vx_from_clear(forward_clear)
