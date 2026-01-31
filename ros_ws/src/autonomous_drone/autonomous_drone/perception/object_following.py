@@ -31,6 +31,7 @@ class ObjectFollowingNode(Node):
         self.follow_yaw_cap = 80.0  # deg/s
         self.follow_lost_timeout = 10.0  # Accommodate slow inference
         self.follow_min_vx = 0.05  # Prevent stalling
+        self.search_yaw_rate = 20.0  # deg/s (search behavior)
         
         self.img_width = 640
         self.img_height = 480
@@ -234,7 +235,8 @@ class ObjectFollowingNode(Node):
         if not self._has_fresh_detection():
             self._prev_distance = None
             self._prev_distance_time = None
-            return False, 0.0, 0.0, 0.0, 0.0
+            # Search behavior: rotate to find target
+            return False, 0.0, 0.0, 0.0, self.search_yaw_rate
         
         meas = self._get_follow_measurements()
         if meas is None:
