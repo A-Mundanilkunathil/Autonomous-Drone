@@ -127,9 +127,9 @@ class ObjectAvoidanceNode(Node):
         if L > -np.inf or R > -np.inf:
             if forward_clear_m <= self.stop_dist_m:
                 if L > R + 0.5:
-                    wz = +self.max_yaw_rate * 0.8  # Turn Left 
+                    wz = +self.max_yaw_rate * 0.85  # Turn Left 
                 elif R > L + 0.2:
-                    wz = -self.max_yaw_rate * 0.8  # Turn Right 
+                    wz = -self.max_yaw_rate * 0.85  # Turn Right 
                 else:
                     wz = 0.0
             else:
