@@ -33,7 +33,7 @@ class AutonomousDroneNode(Node):
         self.fresh_age_s       = 1.0  # seconds
 
         # Follow mode parameters
-        self.follow_lost_timeout = 5.0  # seconds
+        self.follow_lost_timeout = 20.0  # seconds
         self._follow_target_lost_time = None
 
         # Base mission speed
