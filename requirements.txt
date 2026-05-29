@@ -24,6 +24,8 @@ geographiclib
 shapely
 catkin_pkg
 ultralytics
+onnxruntime
+onnxscript
 timm
 pyrealsense2-macosx
 transformers

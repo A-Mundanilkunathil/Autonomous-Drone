@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Record a ROS sensor_msgs/Image topic to an mp4 file.
 
-Used by run_gps_test.sh to capture the drone's onboard gimbal camera while the
-GPS test flies. We record the camera feed (bridged from Gazebo via ros_gz_image)
-rather than the screen, because WSLg's rootless Xwayland makes x11grab capture a
-black root window.
+Used by run_sim_test.sh to capture the onboard camera during a test run. We
+record the bridged camera topic rather than the screen because under WSLg's
+rootless Xwayland an x11grab screen capture comes out black.
 
 Usage:
     python3 record_camera.py <ros_image_topic> <output.mp4> [fps]
@@ -56,9 +55,8 @@ _running = True
 
 
 def _handler(signum, frame):
-    # Just flip a flag — the spin loop below checks it every 0.1s and exits
-    # cleanly. (Calling rclpy.shutdown() here can hang because rclpy.spin()
-    # blocks the Python signal handler from running until it returns.)
+    # Set a flag and let the spin loop exit on its own. Calling rclpy.shutdown()
+    # here can hang, since a blocking rclpy.spin() never yields to the handler.
     global _running
     _running = False
 

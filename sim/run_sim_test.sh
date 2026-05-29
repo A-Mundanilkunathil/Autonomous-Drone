@@ -32,10 +32,10 @@ case "${TEST}" in
         exit 1 ;;
 esac
 
-# Run Gazebo headless (server only, no 3D GUI) by default: under WSLg's software
-# GL the GUI is a CPU hog that starves the sim clock (and crashes MAVProxy on the
-# perception tests). The camera sensor still renders offscreen, so the recording
-# works regardless. Set HEADLESS=0 to show the 3D window.
+# Run Gazebo headless (server only) by default. Under WSLg's software GL the 3D
+# GUI starves the sim clock, which destabilizes MAVProxy on the perception tests.
+# The camera sensor still renders offscreen, so recording is unaffected.
+# Set HEADLESS=0 to show the 3D window.
 headless="${HEADLESS:-1}"
 
 export DISPLAY="${DISPLAY:-:0}"
@@ -109,9 +109,7 @@ wait_for_port() {
     return 1
 }
 
-# Block until a regex appears in a log file, or fail after a timeout. Used to
-# wait for the FCU's "EKF using GPS" event — the drone needs a position estimate
-# before arming, or GUIDED takeoff has nothing to climb against and just sits.
+# Block until a regex appears in a log file, or fail after a timeout.
 wait_for_log() {
     local pattern="$1" file="$2" tries="${3:-150}"
     for ((i = 0; i < tries; i++)); do
@@ -173,10 +171,10 @@ wait_for_port 5760 || { echo "SITL did not open port 5760" >&2; exit 1; }
 echo "Waiting 30s for SITL boot and Gazebo sync..."
 sleep 30
 
-# MAVProxy bridges SITL (TCP 5760) to MAVROS (UDP 14550). It is what actively
-# requests the MAVLink data streams — without it, ArduPilot never sends
-# position/altitude messages and MAVROS reports altitude 0. Run in --daemon mode
-# (no xterm) with the terrain module excluded (its SRTM download crashes).
+# MAVProxy bridges SITL (TCP 5760) to MAVROS (UDP 14550) and requests the MAVLink
+# data streams. Without it ArduPilot never sends position/altitude and MAVROS
+# reports altitude 0. Run with --daemon (no xterm); the terrain module is
+# excluded because its SRTM download crashes.
 echo "=== Starting MAVProxy (SITL TCP 5760 -> UDP 14550) ==="
 mavproxy.py --master=tcp:127.0.0.1:5760 --out=udpout:127.0.0.1:14550 --daemon \
     --streamrate=10 \
@@ -195,20 +193,18 @@ ros2 run mavros mavros_node --ros-args \
     -p tgt_component:=1 > "${MAVROS_LOG}" 2>&1 &
 mavros_pid=$!
 
-# Wait until the EKF is actually fusing GPS, NOT just "origin set". GUIDED
-# takeoff won't climb without a trusted horizontal position, and the test sends
-# the takeoff command only once — so if we arm before GPS is trusted, the climb
-# is silently ignored and the drone sits on the ground. "is using GPS" is the
-# event that guarantees the takeoff will execute. Takes ~1-2 min in sim.
+# Wait until the EKF is fusing GPS, not just "origin set". GUIDED takeoff needs a
+# trusted horizontal position to climb, and the test issues the takeoff command
+# only once; arming before GPS is trusted leaves the drone on the ground. This
+# can take 1-2 min in sim.
 echo "Waiting for EKF to start using GPS (can take ~1-2 min in sim)..."
 wait_for_log "EKF3 IMU[0-9]+ is using GPS" "${MAVROS_LOG}" \
     || echo "WARNING: GPS-ready event not seen; the test may fail to take off." >&2
 echo "EKF is using GPS; letting it settle..."
 sleep 5
 
-# For perception tests, record with the debug overlay (depth danger shading,
-# clearance bar, avoidance steering, detection boxes) off /camera/image_raw.
-# For gps (no perception nodes) record the raw gz camera directly.
+# Perception tests get the debug overlay (depth shading, clearance bar, steering,
+# detection boxes); gps records the plain camera feed.
 if [ "${need_perception}" -eq 1 ]; then
     echo "=== Recording onboard camera (perception overlay) ==="
     python3 "${SIM_DIR}/record_overlay.py" "${CAMERA_TOPIC}" "${VIDEO_OUT}" 10 &

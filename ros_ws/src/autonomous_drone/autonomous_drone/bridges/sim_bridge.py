@@ -14,20 +14,41 @@ class SimBridgeNode(Node):
     def __init__(self):
         super().__init__('sim_bridge')
         
-        # Load MiDaS model for depth estimation
+        # Depth estimation with MiDaS. Inference runs through ONNX Runtime when
+        # available and falls back to PyTorch otherwise. Both paths share the
+        # same MiDaS preprocessing transform.
         self.get_logger().info('Loading MiDaS model...')
-        self.midas_model_type = "MiDaS_small"  # Fast model for real-time processing
-        self.midas = torch.hub.load("intel-isl/MiDaS", self.midas_model_type)
+        self.midas_model_type = "MiDaS_small"
         self.midas_transforms = torch.hub.load("intel-isl/MiDaS", "transforms")
         self.transform = self.midas_transforms.small_transform
-        self.midas.eval()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.midas.to(self.device)
+
+        self.ort_session = None
+        self.midas = None
+        onnx_path = os.path.expanduser('~/.cache/midas/midas_small.onnx')
         try:
-            torch.set_num_threads(1)
-        except Exception:
-            pass
-        self.get_logger().info(f'MiDaS loaded on device: {self.device}')
+            import onnxruntime as ort
+            if not os.path.exists(onnx_path):
+                self.get_logger().info('Exporting MiDaS to ONNX...')
+                self._export_midas_onnx(onnx_path)
+            so = ort.SessionOptions()
+            so.intra_op_num_threads = 2
+            self.ort_session = ort.InferenceSession(
+                onnx_path, sess_options=so, providers=['CPUExecutionProvider'])
+            self._ort_input = self.ort_session.get_inputs()[0].name
+            self.get_logger().info('MiDaS loaded via ONNX Runtime (CPU)')
+        except Exception as e:
+            self.get_logger().warn(f'ONNX unavailable ({e}); falling back to PyTorch')
+
+        if self.ort_session is None:
+            self.midas = torch.hub.load("intel-isl/MiDaS", self.midas_model_type)
+            self.midas.eval()
+            self.midas.to(self.device)
+            try:
+                torch.set_num_threads(1)
+            except Exception:
+                pass
+            self.get_logger().info(f'MiDaS loaded via PyTorch on device: {self.device}')
         
         # MiDaS depth calibration 
         self.midas_scale = 140.0  
@@ -136,17 +157,39 @@ class SimBridgeNode(Node):
             finally:
                 self.depth_queue.task_done()
 
+    def _export_midas_onnx(self, onnx_path):
+        """Export MiDaS_small to ONNX. Dynamic height/width axes keep it valid
+        for any input resolution the transform produces."""
+        os.makedirs(os.path.dirname(onnx_path), exist_ok=True)
+        model = torch.hub.load("intel-isl/MiDaS", self.midas_model_type)
+        model.eval()
+        dummy = torch.randn(1, 3, 256, 256)
+        torch.onnx.export(
+            model, dummy, onnx_path,
+            input_names=['input'], output_names=['output'],
+            dynamic_axes={'input': {0: 'b', 2: 'h', 3: 'w'},
+                          'output': {0: 'b', 1: 'h', 2: 'w'}},
+            opset_version=17,
+            dynamo=False,
+        )
+        self.get_logger().info(f'Exported MiDaS ONNX -> {onnx_path}')
+
     def _run_midas(self, frame_bgr) -> np.ndarray:
         """Run MiDaS depth estimation on a BGR image"""
         # Convert BGR to RGB
         img_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
 
-        # Transform input for MiDaS
-        input_tensor = self.transform(img_rgb).to(self.device)
-        
-        # Run inference
-        with torch.no_grad():
-            depth_prediction = self.midas(input_tensor)
+        # Transform input for MiDaS (same preprocessing for both backends)
+        input_tensor = self.transform(img_rgb)
+
+        # Run inference: ONNX Runtime if available, else PyTorch
+        if self.ort_session is not None:
+            ort_out = self.ort_session.run(
+                None, {self._ort_input: input_tensor.cpu().numpy()})[0]
+            depth_prediction = torch.from_numpy(ort_out)
+        else:
+            with torch.no_grad():
+                depth_prediction = self.midas(input_tensor.to(self.device))
 
         # Resize depth map to original image size
         depth_map = torch.nn.functional.interpolate(

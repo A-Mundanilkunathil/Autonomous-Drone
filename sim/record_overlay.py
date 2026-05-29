@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
-"""Record the onboard camera with a perception/avoidance debug overlay.
+"""Record the onboard camera to mp4 with a perception debug overlay.
 
-Used by run_sim_test.sh for the perception tests so you can SEE what the drone
-perceives and decides — since the onboard cam is first-person (the drone isn't
-in its own view, so its body can't be boxed). Overlays:
-
-  * depth "danger" shading  — near obstacles tinted red (what avoidance reacts to)
-  * forward clearance bar    — /avoidance/forward_clearance
-  * steering indicator       — /avoidance/cmd_vel (lateral + yaw)
-  * detection boxes          — /detected_objects (YOLO; used by the follow test)
+Draws what the perception stack sees and decides onto the camera feed:
+  - depth shading: pixels nearer than NEAR_M tinted red
+  - forward clearance bar from /avoidance/forward_clearance
+  - steering indicator from /avoidance/cmd_vel
+  - detection boxes from /detected_objects
 
 Usage:
     python3 record_overlay.py <camera_topic> <output.mp4> [fps]
@@ -52,14 +49,14 @@ class OverlayRecorder(Node):
         self.clearance = None
         self.cmd = None
 
-        # BEST_EFFORT subscriber is compatible with both reliable and
-        # best-effort publishers, so it works for every source topic.
+        # Best-effort QoS is compatible with both reliable and best-effort
+        # publishers, so a single profile works for every source topic.
         qos = QoSProfile(reliability=ReliabilityPolicy.BEST_EFFORT,
                          durability=DurabilityPolicy.VOLATILE,
                          history=HistoryPolicy.KEEP_LAST, depth=5)
 
-        # Base image: the gz camera (bridged to ROS) — the topic we know
-        # publishes reliably. The overlays come from the perception topics.
+        # Base frame comes from the bridged Gazebo camera; overlays come from
+        # the perception topics below.
         self.create_subscription(Image, camera_topic, self._on_image, qos)
         self.create_subscription(Image, '/camera/depth_map', self._on_depth, qos)
         self.create_subscription(Detection2DArray, '/detected_objects', self._on_det, qos)
