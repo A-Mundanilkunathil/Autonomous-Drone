@@ -1,13 +1,26 @@
+# Python
 __pycache__/
-calibration_images/
 .python-version
-.DS_Store
-venv/ 
-*.pt
-.vscode/
-*.png
-mobileclip_blt.ts
+venv/
+
+# ROS 2 / colcon
 build/
 install/
 log/
+
+# Editors / OS
+.vscode/
+.DS_Store
+
+# Models and weights
+*.pt
+mobileclip_blt.ts
+
+# Data and generated artifacts
+calibration_images/
+sim/recordings/
+*.mp4
+*.png
+
+# Setup helpers
 install_geographiclib_datasets.sh
