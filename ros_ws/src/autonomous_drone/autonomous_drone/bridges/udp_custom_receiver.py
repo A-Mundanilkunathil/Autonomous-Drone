@@ -56,9 +56,9 @@ class UdpFrameReceiver(Node):
         )
 
         # ROS pubs
-        self.pub_img = self.create_publisher(Image, '/camera/image_raw', qos_profile)
-        self.pub_depth = self.create_publisher(Image, '/camera/depth_map', qos_profile)
-        self.pub_info = self.create_publisher(CameraInfo, '/camera/camera_info', qos_profile)
+        self.pub_img = self.create_publisher(Image, 'camera/image_raw', qos_profile)
+        self.pub_depth = self.create_publisher(Image, 'camera/depth_map', qos_profile)
+        self.pub_info = self.create_publisher(CameraInfo, 'camera/camera_info', qos_profile)
 
         self.bridge = CvBridge()
 

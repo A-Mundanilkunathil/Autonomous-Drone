@@ -7,7 +7,6 @@ from cv_bridge import CvBridge
 import numpy as np
 from geometry_msgs.msg import TwistStamped
 import cv2
-import time
 
 class ObjectAvoidanceNode(Node):
     def __init__(self):
@@ -37,14 +36,14 @@ class ObjectAvoidanceNode(Node):
         # Subscribe to depth only
         self.depth_sub = self.create_subscription(
             Image,
-            '/camera/depth_map',
+            'camera/depth_map',
             self.depth_callback,
             qos_profile=qos_input
         )
 
         # Publishers
-        self.cmd_pub = self.create_publisher(TwistStamped, '/avoidance/cmd_vel', qos_output)
-        self.clearance_pub = self.create_publisher(Float32, '/avoidance/forward_clearance', qos_output)
+        self.cmd_pub = self.create_publisher(TwistStamped, 'avoidance/cmd_vel', qos_output)
+        self.clearance_pub = self.create_publisher(Float32, 'avoidance/forward_clearance', qos_output)
 
         # Last command for smoothing (EMA) 
         self._last_vx = 0.0
@@ -170,7 +169,7 @@ class ObjectAvoidanceNode(Node):
     def depth_callback(self, depth_msg):
         """Store latest depth map."""
         self._latest_depth_msg = depth_msg
-        self._last_depth_received_time = time.time()
+        self._last_depth_received_time = self.get_clock().now().nanoseconds / 1_000_000_000.0
 
     def _on_timer(self):
         """Process depth and publish commands at fixed rate."""
@@ -178,7 +177,8 @@ class ObjectAvoidanceNode(Node):
             return
 
         # Check for timeout
-        if time.time() - self._last_depth_received_time > self._depth_timeout:
+        now = self.get_clock().now().nanoseconds / 1_000_000_000.0
+        if now - self._last_depth_received_time > self._depth_timeout:
             # Publish stop command
             msg = TwistStamped()
             msg.header.stamp = self.get_clock().now().to_msg()
@@ -187,7 +187,7 @@ class ObjectAvoidanceNode(Node):
             
             # Publish danger clearance to force stop
             clearance_msg = Float32()
-            clearance_msg.data = float('inf')
+            clearance_msg.data = 0.0
             self.clearance_pub.publish(clearance_msg)
             return
 

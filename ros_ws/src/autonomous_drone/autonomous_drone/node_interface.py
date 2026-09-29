@@ -1,9 +1,12 @@
 import rclpy
 from rclpy.node import Node
+from contextlib import contextmanager
 from autonomous_drone.publishers import MavrosPublishers
 from autonomous_drone.subscribers import MavrosSubscribers
 from autonomous_drone.perception.perception_subs import PerceptionSubscribers
 from autonomous_drone.services import MavrosServices
+from autonomous_drone.core.navigation import haversine_distance_m, target_reached, wrap_pi
+from autonomous_drone.core.safety import forward_speed_for_clearance
 from enum import Enum, auto
 import time
 import math
@@ -16,6 +19,7 @@ class DroneState(Enum):
     FOLLOW = auto()
     RTL = auto()
     LAND = auto()
+    MANUAL = auto()
 
 class AutonomousDroneNode(Node):
     def __init__(self):
@@ -27,22 +31,36 @@ class AutonomousDroneNode(Node):
         self.mavros_srvs = MavrosServices(self)
 
         # Arbitration parameters
-        self.avoid_enter_clear = 0.8  # meters
-        self.avoid_exit_clear  = 1.5  # meters
-        self.avoid_eps         = 0.05  # m/s
-        self.fresh_age_s       = 1.0  # seconds
+        self.avoid_enter_clear = float(
+            self.declare_parameter('avoid_enter_clearance_m', 0.8).value
+        )
+        self.avoid_exit_clear = float(
+            self.declare_parameter('avoid_exit_clearance_m', 1.5).value
+        )
+        self.avoid_eps = float(
+            self.declare_parameter('avoidance_epsilon_mps', 0.05).value
+        )
+        self.fresh_age_s = float(
+            self.declare_parameter('perception_timeout_s', 1.0).value
+        )
 
         # Follow mode parameters
-        self.follow_lost_timeout = 20.0  # seconds
+        self.follow_lost_timeout = float(
+            self.declare_parameter('follow_lost_timeout_s', 20.0).value
+        )
         self._follow_target_lost_time = None
 
         # Base mission speed
-        self._mission_vx = 0.6
+        self._mission_vx = float(
+            self.declare_parameter('mission_speed_mps', 0.6).value
+        )
 
         # State & timer
         self.state = DroneState.IDLE
         self._previous_state = DroneState.IDLE
-        self._control_rate_hz = 20.0
+        self._control_rate_hz = float(
+            self.declare_parameter('control_rate_hz', 20.0).value
+        )
         self._blocking_rate_hz = 50.0
         self._control_timer = self.create_timer(1.0 / self._control_rate_hz, self.control_loop)
 
@@ -58,32 +76,42 @@ class AutonomousDroneNode(Node):
     def _sleep_nonblocking(self, seconds: float, rate_hz: float = 50.0):
         """Non-blocking sleep that yields to ROS callbacks at specified rate"""
         dt = 1.0 / rate_hz
-        end = time.monotonic() + seconds
-        while time.monotonic() < end:
+        end = self._now_seconds() + seconds
+        while self._now_seconds() < end:
             rclpy.spin_once(self, timeout_sec=0.0)
             time.sleep(dt)
 
+    def _now_seconds(self) -> float:
+        """Return ROS time so timeouts follow simulation time when enabled."""
+        return self.get_clock().now().nanoseconds / 1_000_000_000.0
+
+    @contextmanager
+    def _manual_control(self):
+        """Temporarily give a blocking helper exclusive command ownership."""
+        previous_state = self.state
+        self.state = DroneState.MANUAL
+        try:
+            yield
+        finally:
+            self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
+            self.state = previous_state
+
     def wait_until_mission_complete_or_timeout(self, timeout_s=60.0):
-        start_time = time.monotonic()
+        start_time = self._now_seconds()
         while self._mission_target is not None:
             rclpy.spin_once(self, timeout_sec=0.05)
-            if time.monotonic() - start_time > timeout_s:
+            if self._now_seconds() - start_time > timeout_s:
                 self.get_logger().warn('GPS mission timed out!')
                 break
 
     def _vx_from_clear(self, fc: float) -> float:
         """Calculate forward velocity based on obstacle clearance"""
-        stop = 0.5
-        caut = 0.8
-        
-        if not math.isfinite(fc):
-            return self._mission_vx
-        if fc <= stop:
-            return 0.0
-        if fc < caut:
-            t = (fc - stop) / max(1e-3, (caut - stop))
-            return 0.20 + (self._mission_vx - 0.20) * t
-        return self._mission_vx
+        return forward_speed_for_clearance(
+            fc,
+            self._mission_vx,
+            stop_distance_m=0.5,
+            caution_distance_m=0.8,
+        )
 
     def _blend(self, mission_vx: float, base_yaw_rate: float = 0.0) -> tuple[float, float, float, float]:
         """Blend mission forward velocity with avoidance lateral/vertical commands"""
@@ -134,7 +162,7 @@ class AutonomousDroneNode(Node):
         :param a: angle in radians
         :return: wrapped angle in radians
         """
-        return math.atan2(math.sin(a), math.cos(a))
+        return wrap_pi(a)
     
     def _clamp(self, v: float, lo: float, hi: float) -> float:
         """
@@ -152,6 +180,15 @@ class AutonomousDroneNode(Node):
             return
         
         forward_clear = self.perception_subs.get_forward_clearance()
+
+        if self.state in (DroneState.MISSION, DroneState.AVOID, DroneState.FOLLOW):
+            if not self.perception_subs.is_clearance_fresh(self.fresh_age_s):
+                self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
+                self.get_logger().warn(
+                    'Obstacle-clearance data is stale; holding position',
+                    throttle_duration_sec=2.0,
+                )
+                return
         
         # =================== State transitions ===================
         if self.state == DroneState.IDLE:
@@ -168,7 +205,7 @@ class AutonomousDroneNode(Node):
                     self.state = self._previous_state
                 else:
                     self.state = DroneState.MISSION
-                self._avoidance_exit_time = time.monotonic()
+                self._avoidance_exit_time = self._now_seconds()
         
         elif self.state == DroneState.FOLLOW:
             if forward_clear < self.avoid_enter_clear:
@@ -176,10 +213,10 @@ class AutonomousDroneNode(Node):
                 self.state = DroneState.AVOID
             elif not self.perception_subs.has_target():
                 if self._follow_target_lost_time is None:
-                    self._follow_target_lost_time = time.monotonic()
+                    self._follow_target_lost_time = self._now_seconds()
                     self.get_logger().warn('Target lost, hovering and searching...')
                 
-                time_lost = time.monotonic() - self._follow_target_lost_time
+                time_lost = self._now_seconds() - self._follow_target_lost_time
                 if time_lost > self.follow_lost_timeout:
                     self.get_logger().info(f'Target lost for {time_lost:.1f}s, returning to IDLE')
                     self.state = DroneState.IDLE
@@ -200,7 +237,13 @@ class AutonomousDroneNode(Node):
                 # Distance to target
                 distance = self._haversine_distance(curr_lat, curr_lon, lat_t, lon_t)
 
-                if distance < self._mission_target_tolerance_m:
+                altitude_error = 0.0 if alt_t is None else alt_t - curr_alt
+                if target_reached(
+                    distance,
+                    self._mission_target_tolerance_m,
+                    altitude_error,
+                    None if alt_t is None else 0.8,
+                ):
                     self.get_logger().info('Reached GPS mission target')
                     self._mission_target = None
                     vx = 0.0
@@ -225,7 +268,7 @@ class AutonomousDroneNode(Node):
                     max_yaw_rate = 1.0         
 
                     # Recovery behavior: Limit turn rate after avoidance
-                    if (time.monotonic() - self._avoidance_exit_time) < 3.0:
+                    if (self._now_seconds() - self._avoidance_exit_time) < 3.0:
                         max_yaw_rate = 0.2
                          
                     yaw_rate = self._clamp(k_yaw * yaw_err, -max_yaw_rate, +max_yaw_rate)
@@ -301,6 +344,9 @@ class AutonomousDroneNode(Node):
         elif self.state in (DroneState.RTL, DroneState.LAND):
             pass
 
+        elif self.state == DroneState.MANUAL:
+            pass
+
     def start_mission(self):
         """Enable autonomous mission mode with obstacle avoidance"""
         self.state = DroneState.MISSION
@@ -364,16 +410,16 @@ class AutonomousDroneNode(Node):
         
         target_reached = False
         altitude_tolerance = 0.4 
-        deadline = time.monotonic() + timeout
-        last_log = time.monotonic()
+        deadline = self._now_seconds() + timeout
+        last_log = self._now_seconds()
         log_interval = 1.0
         rate_hz = self._blocking_rate_hz
         dt = 1.0 / rate_hz
         
-        while time.monotonic() < deadline:
+        while self._now_seconds() < deadline:
             current_alt = abs(self.mavros_subs.get_relative_altitude())  
             
-            now = time.monotonic()
+            now = self._now_seconds()
             if (now - last_log) >= log_interval:
                 self.get_logger().info(
                     f'Current altitude: {current_alt:.2f}m / Target: {altitude}m'
@@ -401,76 +447,71 @@ class AutonomousDroneNode(Node):
 
     def move_body_velocity(self, vx: float, vy: float, vz: float, duration: float = 2.0, yaw_rate: float = 0.0):
         """Move with velocity for specified duration (BODY frame FLU convention)"""
-        deadline = time.monotonic() + duration
-        rate_hz = 20.0
-        dt = 1.0 / rate_hz
+        with self._manual_control():
+            deadline = self._now_seconds() + duration
+            rate_hz = 20.0
+            dt = 1.0 / rate_hz
 
-        while time.monotonic() < deadline:
-            self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
-            self._sleep_nonblocking(dt, rate_hz=rate_hz)
+            while self._now_seconds() < deadline:
+                self.mavros_pubs.publish_velocity_body(vx, vy, vz, yaw_rate)
+                self._sleep_nonblocking(dt, rate_hz=rate_hz)
         
     def goto_position(self, x: float, y: float, z: float, duration: float = 5.0):
         """Go to position and hold (ENU frame)"""
-        deadline = time.monotonic() + duration
-        rate_hz = 20.0
-        dt = 1.0 / rate_hz
+        with self._manual_control():
+            deadline = self._now_seconds() + duration
+            rate_hz = 20.0
+            dt = 1.0 / rate_hz
 
-        while time.monotonic() < deadline:
-            self.mavros_pubs.publish_position(x, y, z)
-            self._sleep_nonblocking(dt, rate_hz=rate_hz)
+            while self._now_seconds() < deadline:
+                self.mavros_pubs.publish_position(x, y, z)
+                self._sleep_nonblocking(dt, rate_hz=rate_hz)
     
     def _haversine_distance(self, lat1, lon1, lat2, lon2):
-        import math
-
-        R = 6371000 # Earth radius in meters
-        d_lat = math.radians(lat2 - lat1)
-        d_lon = math.radians(lon2 - lon1)
-        a = (
-            math.sin(d_lat / 2)**2 + 
-            math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * 
-            math.sin(d_lon / 2)**2
-        )
-        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-        distance = R * c # Distance in meters
-        return distance
+        return haversine_distance_m(lat1, lon1, lat2, lon2)
 
     def goto_gps(self, target_lat, target_lon, target_alt=None, timeout_s=90.0):
         """Go to GPS coordinates maintaining altitude"""
-        deadline = time.monotonic() + timeout_s
-        rate_hz = 20.0
-        dt = 1.0 / rate_hz
+        with self._manual_control():
+            deadline = self._now_seconds() + timeout_s
+            rate_hz = 20.0
+            dt = 1.0 / rate_hz
 
-        while time.monotonic() < deadline:
-            curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
-            curr_alt = self.mavros_subs.get_relative_altitude()
+            while self._now_seconds() < deadline:
+                curr_lat, curr_lon, _ = self.mavros_subs.get_global_position()
+                curr_alt = self.mavros_subs.get_relative_altitude()
 
-            distance = self._haversine_distance(
-                curr_lat, curr_lon, target_lat, target_lon
-            )
+                distance = self._haversine_distance(
+                    curr_lat, curr_lon, target_lat, target_lon
+                )
             
-            if target_alt is not None:
-                print(f"Current altitude: {curr_alt:.2f} m, Target altitude: {target_alt:.2f} m")
-                alt_error = target_alt - curr_alt
-            else:
-                alt_error = 0.0
+                if target_alt is not None:
+                    alt_error = target_alt - curr_alt
+                else:
+                    alt_error = 0.0
 
-            self.mavros_pubs.publish_global_position(
-                latitude=target_lat,
-                longitude=target_lon,
-                altitude_m=target_alt,
-                relative_alt=True
-            )
+                self.mavros_pubs.publish_global_position(
+                    latitude=target_lat,
+                    longitude=target_lon,
+                    altitude_m=target_alt,
+                    relative_alt=True
+                )
 
-            self.get_logger().info(
-                f"Distance to target: {distance:.2f} m | "
-                f"Alt error: {alt_error:.2f} m"
-            )
+                self.get_logger().info(
+                    f"Distance to target: {distance:.2f} m | "
+                    f"Alt error: {alt_error:.2f} m"
+                )
 
-            if distance < 1.5 and alt_error < 0.8:
-                self.get_logger().info("Target reached!")
-                break
+                if target_reached(
+                    distance,
+                    1.5,
+                    alt_error,
+                    None if target_alt is None else 0.8,
+                ):
+                    self.get_logger().info("Target reached!")
+                    break
 
-            self._sleep_nonblocking(dt, rate_hz=rate_hz)
+                self._sleep_nonblocking(dt, rate_hz=rate_hz)
             
     def land(self, timeout: float = 60.0) -> bool:
         """Command the drone to land and wait until on ground"""
@@ -483,17 +524,17 @@ class AutonomousDroneNode(Node):
             return False
         
         ground_threshold = 0.4
-        deadline = time.monotonic() + timeout
+        deadline = self._now_seconds() + timeout
         landed = False
-        last_log = time.monotonic()
+        last_log = self._now_seconds()
         log_interval = 1.0
         rate_hz = self._blocking_rate_hz
         dt = 1.0 / rate_hz
         
-        while time.monotonic() < deadline:
+        while self._now_seconds() < deadline:
             current_alt = abs(self.mavros_subs.get_relative_altitude())  
             
-            now = time.monotonic()
+            now = self._now_seconds()
             if (now - last_log) >= log_interval:
                 self.get_logger().info(f'Landing... altitude: {current_alt:.2f}m')
                 last_log = now
@@ -516,13 +557,14 @@ class AutonomousDroneNode(Node):
     def hover(self, duration: float = 5.0):
         """Hover in place for specified duration"""
         self.get_logger().info(f'Hovering for {duration}s...')
-        deadline = time.monotonic() + duration
-        rate_hz = 20.0
-        dt = 1.0 / rate_hz
+        with self._manual_control():
+            deadline = self._now_seconds() + duration
+            rate_hz = 20.0
+            dt = 1.0 / rate_hz
 
-        while time.monotonic() < deadline:
-            self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
-            self._sleep_nonblocking(dt, rate_hz=rate_hz)
+            while self._now_seconds() < deadline:
+                self.mavros_pubs.publish_velocity_body(0.0, 0.0, 0.0, 0.0)
+                self._sleep_nonblocking(dt, rate_hz=rate_hz)
     
     def return_to_launch(self, pos_tol_m: float, alt_tol_m: float, timeout: float = 180.0, smart: bool = True) -> bool:
         """
@@ -560,11 +602,11 @@ class AutonomousDroneNode(Node):
                 return False
             self.get_logger().info('RTL mode activated')
             
-        deadline = time.monotonic() + timeout
+        deadline = self._now_seconds() + timeout
         rate_hz = 20.0
         dt = 1.0 / rate_hz
         
-        while time.monotonic() < deadline:
+        while self._now_seconds() < deadline:
             curr_lat, curr_lon, curr_alt = self.mavros_subs.get_global_position()
             distance = self._haversine_distance(curr_lat, curr_lon, lat, lon)
             alt_diff = abs(curr_alt - alt)
@@ -600,11 +642,11 @@ class AutonomousDroneNode(Node):
 
         rate_hz = 20.0
         dt = 1.0 / rate_hz
-        start_time = time.monotonic()
+        start_time = self._now_seconds()
         deadline = start_time + duration
 
-        while time.monotonic() < deadline:
-            elapsed = time.monotonic() - start_time
+        while self._now_seconds() < deadline:
+            elapsed = self._now_seconds() - start_time
             angle = (speed / radius) * elapsed
             target_x = center_x + radius * math.cos(angle)
             target_y = center_y + radius * math.sin(angle)
@@ -652,13 +694,13 @@ class AutonomousDroneNode(Node):
         self.get_logger().info(f'Moving left at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=speed, vz=0.0, duration=duration)
     def move_up(self, speed: float, duration: float):
-        """Move up in body frame (FLU: negative Z is up)"""
+        """Move up in body frame (FLU: positive Z is up)"""
         self.get_logger().info(f'Moving up at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=0.0, vy=0.0, vz=-speed, duration=duration)
-    def move_down(self, speed: float, duration: float):
-        """Move down in body frame (FLU: positive Z is down)"""
-        self.get_logger().info(f'Moving down at {speed}m/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=speed, duration=duration)
+    def move_down(self, speed: float, duration: float):
+        """Move down in body frame (FLU: negative Z is down)"""
+        self.get_logger().info(f'Moving down at {speed}m/s for {duration}s')
+        self.move_body_velocity(vx=0.0, vy=0.0, vz=-speed, duration=duration)
 
     # Diagonal movements
     def move_diagonal_front_right(self, speed: float=1.0, duration: float=2.0):
@@ -675,28 +717,28 @@ class AutonomousDroneNode(Node):
         self.move_body_velocity(vx=-speed, vy=+speed, vz=0.0, duration=duration, yaw_rate=0.0)
     def move_diagonal_front_right_up(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal front right up at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=+speed, vy=-speed, vz=-speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=+speed, vy=-speed, vz=+speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_front_right_down(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal front right down at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=+speed, vy=-speed, vz=+speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=+speed, vy=-speed, vz=-speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_front_left_up(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal front left up at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=+speed, vy=+speed, vz=-speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=+speed, vy=+speed, vz=+speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_front_left_down(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal front left down at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=+speed, vy=+speed, vz=+speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=+speed, vy=+speed, vz=-speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_back_right_up(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal back right up at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=-speed, vy=-speed, vz=-speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=-speed, vy=-speed, vz=+speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_back_right_down(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal back right down at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=-speed, vy=-speed, vz=+speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=-speed, vy=-speed, vz=-speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_back_left_up(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal back left up at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=-speed, vy=+speed, vz=-speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=-speed, vy=+speed, vz=+speed, duration=duration, yaw_rate=0.0)
     def move_diagonal_back_left_down(self, speed: float=0.5, duration: float=2.0):
         self.get_logger().info(f'Moving diagonal back left down at {speed}m/s for {duration}s')
-        self.move_body_velocity(vx=-speed, vy=+speed, vz=+speed, duration=duration, yaw_rate=0.0)
+        self.move_body_velocity(vx=-speed, vy=+speed, vz=-speed, duration=duration, yaw_rate=0.0)
 
     # Rotation movements
     def rotate_left(self, yaw_rate: float, duration: float):
@@ -708,16 +750,18 @@ class AutonomousDroneNode(Node):
         self.get_logger().info(f'Rotating right at {yaw_rate}°/s for {duration}s')
         self.move_body_velocity(vx=0.0, vy=0.0, vz=0.0, duration=duration, yaw_rate=-yaw_rate)
 
-# def main(args=None):
-#     rclpy.init(args=args)
-#     node = AutonomousDroneNode()
-#     try:
-#         rclpy.spin(node)
-#     except KeyboardInterrupt:
-#         pass
-#     finally:
-#         node.destroy_node()
-#         rclpy.shutdown()
+def main(args=None):
+    rclpy.init(args=args)
+    node = AutonomousDroneNode()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
-# if __name__ == '__main__':
-#     main()
+
+if __name__ == '__main__':
+    main()

@@ -32,12 +32,17 @@ A comprehensive ROS2-based framework for autonomous drone control, featuring GPS
 
 ### Setup
 
-1.  **Install Python Dependencies**:
+1. **Clone simulation dependencies**:
+    ```bash
+    git submodule update --init --recursive
+    ```
+
+2. **Install Python Dependencies**:
     ```bash
     pip install -r requirements.txt
     ```
 
-2.  **Build the ROS2 Workspace**:
+3. **Build the ROS2 Workspace**:
     ```bash
     cd ros_ws
     ./build_package.sh
@@ -53,6 +58,12 @@ cd ros_ws
 ./launch_drone.sh sim
 ```
 
+Use the `namespace` launch argument when running more than one vehicle stack:
+
+```bash
+ros2 launch autonomous_drone autonomous_drone_sim.launch.py namespace:=uav1
+```
+
 
 
 ### 2. Real Hardware
@@ -66,7 +77,17 @@ cd ros_ws
 
 
 ### 3. Running Tests
-The project includes a test runner for various capabilities:
+
+The default automated suite contains ROS-independent control and safety tests and
+does not communicate with flight hardware:
+
+```bash
+PYTHONPATH=ros_ws/src/autonomous_drone \
+  python -m unittest discover -s ros_ws/src/autonomous_drone/test -v
+```
+
+Install `requirements-dev.txt` to run the same suite through pytest. Hardware and
+SITL scenarios remain explicit manual tests:
 
 ```bash
 cd ros_ws
@@ -75,6 +96,19 @@ cd ros_ws
 ./run_test.sh gps          # Test GPS navigation with avoidance
 ./run_test.sh gps_with_avoidance # Test GPS navigation
 ```
+
+## Architecture
+
+The production ROS2 package under `ros_ws/src/autonomous_drone` is the canonical
+runtime. Its `core` package contains ROS-independent navigation and safety rules;
+ROS nodes adapt MAVROS and perception messages around that core. Only the flight
+manager publishes final MAVROS setpoints. The top-level `src/` tree contains
+standalone hardware and perception utilities and should not be imported by the
+ROS runtime.
+
+All application topics are relative so a complete stack can run under a ROS
+namespace. Simulator-owned topics, such as the Gazebo camera input, are supplied
+as parameters or remappings.
 
 ## Hardware Configuration
 [Connect ESCs and Motors](https://ardupilot.org/copter/docs/connect-escs-and-motors.html)
@@ -90,4 +124,3 @@ cd ros_ws
 -   **GPS + Compass**:
     - Mission Planner: 115200, GPS
     - Flight Controller: R4, I2C, 4V5, G
-

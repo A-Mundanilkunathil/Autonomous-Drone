@@ -24,7 +24,7 @@ class ObjectDetectorNode(Node):
         # Subscribe to camera
         self.image_sub = self.create_subscription(
             Image,
-            '/camera/image_raw',
+            'camera/image_raw',
             self.image_callback,
             qos_profile
         )
@@ -36,8 +36,13 @@ class ObjectDetectorNode(Node):
         # Publish detected objects
         self.detection_pub = self.create_publisher(
             Detection2DArray,
-            '/detected_objects',
+            'detected_objects',
             10
+        )
+
+        self.model_path = self.declare_parameter('model_path', 'yolov8n.pt').value
+        self.confidence_threshold = float(
+            self.declare_parameter('confidence_threshold', 0.25).value
         )
 
         # Load detection model
@@ -46,7 +51,7 @@ class ObjectDetectorNode(Node):
     def load_model(self):
         # Load YOLOv8s model
         try:
-            model = YOLO('yolov8n.pt')
+            model = YOLO(self.model_path)
 
             self.get_logger().info('Loaded YOLOv8s model')
             return model
@@ -73,7 +78,9 @@ class ObjectDetectorNode(Node):
         self.frame_count += 1
         
         # Run detection
-        results = self.detector.predict(cv_image, conf=0.01)
+        results = self.detector.predict(
+            cv_image, conf=self.confidence_threshold, verbose=False
+        )
 
         # Convert results to ROS messages
         detection_array_msg = Detection2DArray()
@@ -104,8 +111,8 @@ class ObjectDetectorNode(Node):
             self.detection_count += 1
 
         # Publish results
+        self.detection_pub.publish(detection_array_msg)
         if len(detection_array_msg.detections) > 0:
-            self.detection_pub.publish(detection_array_msg)
             self.get_logger().info(
                 f'Frame {self.frame_count}: Detected {len(detection_array_msg.detections)} objects',
                 throttle_duration_sec=2.0

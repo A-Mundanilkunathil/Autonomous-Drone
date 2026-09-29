@@ -15,28 +15,28 @@ class MavrosPublishers:
         # Position control - send where the drone should go
         self.local_pos_pub = node.create_publisher(
             PoseStamped,
-            '/mavros/setpoint_position/local', # MAVROS topic for local position setpoints
+            'mavros/setpoint_position/local', # Relative so ROS namespaces work
             10 # QoS history depth
         )
 
         # Velocity control - send how fast the drone should move
         self.velocity_pub = node.create_publisher(
             TwistStamped,
-            '/mavros/setpoint_velocity/cmd_vel', # MAVROS topic for velocity setpoints
+            'mavros/setpoint_velocity/cmd_vel',
             10 # QoS history depth
         )
 
         # Raw position/velocity targets - advanced control
         self.position_target_pub = node.create_publisher(
             PositionTarget,
-            '/mavros/setpoint_raw/local', # MAVROS topic for raw local setpoints
+            'mavros/setpoint_raw/local',
             10 # QoS history depth
         )
 
         # Raw position/velocity targets - advanced control
         self.position_target_global_pub = node.create_publisher(
             GlobalPositionTarget,
-            '/mavros/setpoint_raw/global', # MAVROS topic for raw global setpoints
+            'mavros/setpoint_raw/global',
             10 # QoS history depth
         )
 

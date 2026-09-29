@@ -8,19 +8,19 @@ class MavrosServices:
         self.node = node
 
         # Arm/disarm service
-        self.arm_client = node.create_client(CommandBool, "/mavros/cmd/arming")
+        self.arm_client = node.create_client(CommandBool, "mavros/cmd/arming")
 
         # Mode change service
-        self.mode_client = node.create_client(SetMode, "/mavros/set_mode")
+        self.mode_client = node.create_client(SetMode, "mavros/set_mode")
 
         # Takeoff service
-        self.takeoff_client = node.create_client(CommandTOL, "/mavros/cmd/takeoff")
+        self.takeoff_client = node.create_client(CommandTOL, "mavros/cmd/takeoff")
 
         # Land service
-        self.land_client = node.create_client(CommandTOL, "/mavros/cmd/land")
+        self.land_client = node.create_client(CommandTOL, "mavros/cmd/land")
 
         # Set home service
-        self.set_home_client = node.create_client(CommandHome, "/mavros/cmd/set_home")
+        self.set_home_client = node.create_client(CommandHome, "mavros/cmd/set_home")
 
         node.get_logger().info('MAVROS Services initialized.')
 

@@ -1,0 +1,20 @@
+name: Core checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python sources
+        run: python -m compileall -q ros_ws/src/autonomous_drone/autonomous_drone
+      - name: Run ROS-independent unit tests
+        env:
+          PYTHONPATH: ros_ws/src/autonomous_drone
+        run: python -m unittest discover -s ros_ws/src/autonomous_drone/test -v

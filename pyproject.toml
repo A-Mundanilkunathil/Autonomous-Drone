@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["ros_ws/src/autonomous_drone/test"]
+pythonpath = ["ros_ws/src/autonomous_drone"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+exclude = ["sim/ardupilot"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]

@@ -55,16 +55,21 @@ class SimBridgeNode(Node):
         self.midas_shift = 0.13   
         self._load_midas_calibration()
         
+        camera_topic = self.declare_parameter(
+            'input_camera_topic',
+            '/world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image',
+        ).value
+
         # Subscribe to Gazebo camera
         self.camera_subscription = self.create_subscription(
             Image,
-            '/world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image',
+            camera_topic,
             self._camera_callback,
             10)
         
         # Publishers
-        self.camera_publisher = self.create_publisher(Image, '/camera/image_raw', 10)
-        self.depth_publisher = self.create_publisher(Image, '/camera/depth_map', 10)
+        self.camera_publisher = self.create_publisher(Image, 'camera/image_raw', 10)
+        self.depth_publisher = self.create_publisher(Image, 'camera/depth_map', 10)
         self.bridge = CvBridge()
 
         # Background depth processing

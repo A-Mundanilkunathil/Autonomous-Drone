@@ -1,5 +1,6 @@
 import numpy as np
 import sys
+from pathlib import Path
 
 def test_npz(filepath):
     """Test and display contents of NPZ calibration file"""
@@ -103,6 +104,6 @@ if __name__ == '__main__':
     if len(sys.argv) > 1:
         filepath = sys.argv[1]
     else:
-        filepath = '/home/hp/Desktop/Autonomous-Drone/ros_ws/bridges/camera_calib.npz'
+        filepath = Path(__file__).resolve().parents[2] / 'bridges' / 'camera_calib.npz'
     
     test_npz(filepath)

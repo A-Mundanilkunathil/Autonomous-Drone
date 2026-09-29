@@ -6,9 +6,9 @@ from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool, Float32
 from sensor_msgs.msg import Image
 from cv_bridge import CvBridge
-import time
 import math
 import numpy as np
+from autonomous_drone.core.control import body_tracking_corrections, damped_distance_speed
 
 class ObjectFollowingNode(Node):
     def __init__(self):
@@ -24,14 +24,14 @@ class ObjectFollowingNode(Node):
         self.k_vx_d = 0.3  # D gain for velocity damping
         self.k_vy = 0.8  # Lateral centering gain
         self.k_vz = 0.8  # Vertical centering gain
-        self.k_yaw = 35.0  # Yaw tracking gain (deg/s)
+        self.k_yaw = 0.6  # Yaw tracking gain (rad/s)
         self.follow_vx_cap = 1.2  # m/s
         self.follow_vy_cap = 0.7  # m/s
         self.follow_vz_cap = 0.6  # m/s
-        self.follow_yaw_cap = 80.0  # deg/s
+        self.follow_yaw_cap = 1.4  # rad/s
         self.follow_lost_timeout = 20.0  # Accommodate slow inference
         self.follow_min_vx = 0.05  # Prevent stalling
-        self.search_yaw_rate = 10.0  # deg/s (search behavior)
+        self.search_yaw_rate = 0.17  # rad/s (search behavior)
         
         self.img_width = 640
         self.img_height = 480
@@ -71,7 +71,7 @@ class ObjectFollowingNode(Node):
         # Subscribe to detections
         self.detection_sub = self.create_subscription(
             Detection2DArray,
-            '/detected_objects',
+            'detected_objects',
             self._detection_callback,
             qos_profile=qos_input
         )
@@ -79,7 +79,7 @@ class ObjectFollowingNode(Node):
         # Subscribe to depth map for distance estimation
         self.depth_sub = self.create_subscription(
             Image,
-            '/camera/depth_map',
+            'camera/depth_map',
             self._depth_callback,
             qos_profile=qos_input
         )
@@ -87,7 +87,7 @@ class ObjectFollowingNode(Node):
         # Subscribe to forward clearance for dynamic setpoint
         self.clearance_sub = self.create_subscription(
             Float32,
-            '/avoidance/forward_clearance',
+            'avoidance/forward_clearance',
             self._clearance_callback,
             qos_profile=qos_input
         )
@@ -95,12 +95,12 @@ class ObjectFollowingNode(Node):
         # Publish following commands
         self.cmd_pub = self.create_publisher(
             TwistStamped, 
-            '/following/cmd_vel', 
+            'following/cmd_vel',
             qos_output
         )
         self.target_found_pub = self.create_publisher(
             Bool, 
-            '/following/target_found', 
+            'following/target_found',
             qos_output
         )
 
@@ -110,7 +110,7 @@ class ObjectFollowingNode(Node):
         """Store latest depth map for distance estimation"""
         try:
             self._latest_depth_map = msg
-            self._depth_timestamp = time.monotonic()
+            self._depth_timestamp = self._now_seconds()
         except Exception as e:
             self.get_logger().warn(f'Depth callback error: {e}')
     
@@ -120,7 +120,7 @@ class ObjectFollowingNode(Node):
             fc = float(msg.data)
             if not (math.isnan(fc) or math.isinf(fc)):
                 self._forward_clearance = fc
-                self._clearance_timestamp = time.monotonic()
+                self._clearance_timestamp = self._now_seconds()
         except Exception as e:
             self.get_logger().warn(f'Clearance callback error: {e}')
 
@@ -149,12 +149,12 @@ class ObjectFollowingNode(Node):
         if best is not None:
             self._last_det_bbox = best
             self._last_det_score = best_score
-            self._last_det_time = time.monotonic()
+            self._last_det_time = self._now_seconds()
 
     def _has_fresh_detection(self) -> bool:
         if self._last_det_bbox is None or self._last_det_time is None:
             return False
-        return (time.monotonic() - self._last_det_time) < self.follow_lost_timeout
+        return (self._now_seconds() - self._last_det_time) < self.follow_lost_timeout
 
     def _get_follow_measurements(self):
         if self._last_det_bbox is None:
@@ -176,7 +176,7 @@ class ObjectFollowingNode(Node):
         """Extract depth at bounding box center."""
         if self._latest_depth_map is None:
             return None
-        if (time.monotonic() - self._depth_timestamp) > 0.5:
+        if (self._now_seconds() - self._depth_timestamp) > 0.5:
             return None
             
         try:
@@ -215,7 +215,7 @@ class ObjectFollowingNode(Node):
     
     def _get_dynamic_setpoint(self) -> float:
         """Adjust target distance based on available forward clearance"""
-        if (time.monotonic() - self._clearance_timestamp) < 0.5:
+        if (self._now_seconds() - self._clearance_timestamp) < 0.5:
             clearance = self._forward_clearance
             
             # Tight space: maintain closer
@@ -247,20 +247,24 @@ class ObjectFollowingNode(Node):
         depth_distance = self._get_depth_at_bbox(cx, cy, bw, bh)
         desired_distance = self._get_dynamic_setpoint()
 
-        current_time = time.monotonic()
+        current_time = self._now_seconds()
         
         if depth_distance is not None and depth_distance > 0.1:
             # PD control with depth
             distance_error = depth_distance - desired_distance
             
-            derivative_term = 0.0
+            distance_rate = 0.0
             if self._prev_distance is not None and self._prev_distance_time is not None:
                 dt = current_time - self._prev_distance_time
                 if dt > 0.01:
                     distance_rate = (depth_distance - self._prev_distance) / dt
-                    derivative_term = self.k_vx_d * distance_rate
-            
-            vx = -self.k_vx * distance_error - derivative_term
+
+            vx = damped_distance_speed(
+                distance_error,
+                distance_rate,
+                self.k_vx,
+                self.k_vx_d,
+            )
             self._prev_distance = depth_distance
             self._prev_distance_time = current_time
         else:
@@ -277,9 +281,13 @@ class ObjectFollowingNode(Node):
             vx = max(vx, self.follow_min_vx)
 
         # Lateral, vertical, yaw control
-        vy = -self.k_vy * ex
-        vz = +self.k_vz * ey
-        yaw_rate = self.k_yaw * ex
+        vy, vz, yaw_rate = body_tracking_corrections(
+            ex,
+            ey,
+            self.k_vy,
+            self.k_vz,
+            self.k_yaw,
+        )
 
         # Deadband for area-based only
         if depth_distance is None:
@@ -298,6 +306,9 @@ class ObjectFollowingNode(Node):
     def _on_timer(self):
         """Timer callback to publish at fixed rate"""
         self._publish_follow_cmd()
+
+    def _now_seconds(self) -> float:
+        return self.get_clock().now().nanoseconds / 1_000_000_000.0
 
     def _publish_follow_cmd(self):
         """Publish velocity commands and target status"""

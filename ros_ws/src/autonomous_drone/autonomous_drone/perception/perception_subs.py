@@ -8,7 +8,6 @@ from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import Float32, Bool
 from typing import Optional
 import numpy as np
-import time
 import math
 
 class PerceptionSubscribers:
@@ -24,7 +23,8 @@ class PerceptionSubscribers:
         # Avoidance data
         self.avoidance_cmd = None
         self.avoidance_timestamp = 0.0
-        self.forward_clearance = float('inf')
+        self.forward_clearance = 0.0
+        self.clearance_timestamp = None
 
         # Following data
         self.following_cmd = None
@@ -37,7 +37,7 @@ class PerceptionSubscribers:
         # Subscribe to avoidance commands from perception nodes
         self.avoidance_sub = node.create_subscription(
             TwistStamped,
-            '/avoidance/cmd_vel',
+            'avoidance/cmd_vel',
             self._avoidance_callback,
             qos_profile=1
         )
@@ -45,7 +45,7 @@ class PerceptionSubscribers:
         # Subscribe to forward clearance from perception nodes
         self.clearance_sub = node.create_subscription(
             Float32,
-            '/avoidance/forward_clearance',
+            'avoidance/forward_clearance',
             self._clearance_callback,
             qos_profile=1
         )
@@ -53,7 +53,7 @@ class PerceptionSubscribers:
         # Subscribe to following commands from object following node
         self.following_sub = node.create_subscription(
             TwistStamped,
-            '/following/cmd_vel',
+            'following/cmd_vel',
             self._following_callback,
             qos_profile=1
         )
@@ -61,7 +61,7 @@ class PerceptionSubscribers:
         # Subscribe to target found status
         self.target_found_sub = node.create_subscription(
             Bool,
-            '/following/target_found',
+            'following/target_found',
             self._target_found_callback,
             qos_profile=1
         )
@@ -69,7 +69,7 @@ class PerceptionSubscribers:
         # Subscribe to VSLAM sparse 3-D map
         self.map_sub = node.create_subscription(
             PointCloud2,
-            '/vslam/map',
+            'vslam/map',
             self._map_callback,
             qos_profile=1
         )
@@ -79,24 +79,26 @@ class PerceptionSubscribers:
     def _avoidance_callback(self, msg: TwistStamped):
         """Receives avoidance velocity commands from perception nodes"""
         self.avoidance_cmd = msg
-        self.avoidance_timestamp = time.monotonic()
+        self.avoidance_timestamp = self._now_seconds()
 
     def _clearance_callback(self, msg: Float32):
         """Receives forward clearance distance from perception nodes"""
         try:
             fc = float(msg.data)
-            if math.isnan(fc) or math.isinf(fc):
-                self.forward_clearance = float('inf')
+            if math.isnan(fc) or math.isinf(fc) or fc < 0.0:
+                self.forward_clearance = 0.0
             else:
                 self.forward_clearance = fc
+            self.clearance_timestamp = self._now_seconds()
         except Exception as e:
-            self.forward_clearance = float('inf')
+            self.forward_clearance = 0.0
+            self.clearance_timestamp = self._now_seconds()
             self.node.get_logger().warn(f'Clearance callback error: {e}')
 
     def _following_callback(self, msg: TwistStamped):
         """Receives following velocity commands from object following node"""
         self.following_cmd = msg
-        self.following_timestamp = time.monotonic()
+        self.following_timestamp = self._now_seconds()
 
     def _target_found_callback(self, msg: Bool):
         """Receives target found status from object following node"""
@@ -126,6 +128,14 @@ class PerceptionSubscribers:
         Returns: Distance in meters (inf if no obstacle detected)
         """
         return self.forward_clearance
+
+    def _now_seconds(self) -> float:
+        return self.node.get_clock().now().nanoseconds / 1_000_000_000.0
+
+    def is_clearance_fresh(self, max_age_s: float = 1.0) -> bool:
+        if self.clearance_timestamp is None:
+            return False
+        return (self._now_seconds() - self.clearance_timestamp) < max_age_s
     
     def is_avoidance_fresh(self, max_age_s: float = 1.0) -> bool:
         """
@@ -136,7 +146,7 @@ class PerceptionSubscribers:
         """
         if self.avoidance_cmd is None:
             return False
-        return (time.monotonic() - self.avoidance_timestamp) < max_age_s
+        return (self._now_seconds() - self.avoidance_timestamp) < max_age_s
     
     def is_avoidance_requesting(self, eps: float = 0.05) -> bool:
         """
@@ -167,7 +177,7 @@ class PerceptionSubscribers:
         """
         if self.following_cmd is None:
             return False
-        return (time.monotonic() - self.following_timestamp) < max_age_s
+        return (self._now_seconds() - self.following_timestamp) < max_age_s
     
     def has_target(self) -> bool:
         """

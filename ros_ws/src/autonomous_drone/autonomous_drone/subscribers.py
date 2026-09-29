@@ -37,7 +37,7 @@ class MavrosSubscribers:
         # Subscribe to drone state (armed, mode, connected)
         self.state_sub = node.create_subscription(
             State,
-            '/mavros/state',
+            'mavros/state',
             self._state_callback,
             qos_profile  
         )
@@ -45,7 +45,7 @@ class MavrosSubscribers:
         # Subsribe to position
         self.local_pos_sub = node.create_subscription(
             PoseStamped,
-            '/mavros/local_position/pose',
+            'mavros/local_position/pose',
             self._local_pos_callback,
             qos_profile  
         )
@@ -53,7 +53,7 @@ class MavrosSubscribers:
         # Subscribe to global position local 
         self.global_pos_local_sub = node.create_subscription(
             Odometry,
-            '/mavros/global_position/local',
+            'mavros/global_position/local',
             self._global_pos_local_callback,
             qos_profile
         )
@@ -61,7 +61,7 @@ class MavrosSubscribers:
         # Subscribe to velocity
         self.velocity_sub = node.create_subscription(
             TwistStamped,
-            '/mavros/local_position/velocity_local',
+            'mavros/local_position/velocity_local',
             self._velocity_callback,
             qos_profile  
         )
@@ -69,7 +69,7 @@ class MavrosSubscribers:
         # Subscribe to GPS
         self.gps_sub = node.create_subscription(
             NavSatFix,
-            '/mavros/global_position/global',
+            'mavros/global_position/global',
             self._gps_callback,
             qos_profile
         )
@@ -77,7 +77,7 @@ class MavrosSubscribers:
         # Subscribe to altitude
         self.altitude_sub = node.create_subscription(
             Altitude,
-            '/mavros/altitude',
+            'mavros/altitude',
             self._altitude_callback,
             qos_profile
         )
@@ -85,7 +85,7 @@ class MavrosSubscribers:
         # Subscribe to home position
         self.home_sub = node.create_subscription(
             HomePosition,
-            '/mavros/home_position/home',
+            'mavros/home_position/home',
             self._home_callback,
             qos_profile
         )
@@ -93,7 +93,7 @@ class MavrosSubscribers:
         # Subscribe to VSLAM virtual GPS (fallback when real GPS is lost)
         self.vslam_gps_sub = node.create_subscription(
             NavSatFix,
-            '/vslam/gps',
+            'vslam/gps',
             self._vslam_gps_callback,
             qos_profile
         )
@@ -216,11 +216,11 @@ class MavrosSubscribers:
         
         return 0.0
     
-    def get_home_position(self) -> tuple:
+    def get_home_position(self) -> tuple | None:
         if self.home:
             return (
                 self.home.geo.latitude,
                 self.home.geo.longitude,
                 self.home.geo.altitude
             )
-        return (0.0, 0.0, 0.0)
+        return None

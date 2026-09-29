@@ -117,27 +117,27 @@ class VSLAMNode(Node):
 
         # ── Subscribers ─────────────────────────────────────────────────────
         self.create_subscription(
-            Image,      '/camera/image_raw',
+            Image,      'camera/image_raw',
             self._img_cb,     qos_be)
         self.create_subscription(
-            Image,      '/camera/depth_map',
+            Image,      'camera/depth_map',
             self._depth_cb,   qos_be)
         self.create_subscription(
-            CameraInfo, '/camera/camera_info',
+            CameraInfo, 'camera/camera_info',
             self._caminfo_cb, 10)
         self.create_subscription(
-            NavSatFix,  '/mavros/global_position/global',
+            NavSatFix,  'mavros/global_position/global',
             self._gps_cb,     qos_be)
         self.create_subscription(
-            Float64,    '/mavros/global_position/compass_hdg',
+            Float64,    'mavros/global_position/compass_hdg',
             self._hdg_cb,     qos_be)
 
         # ── Publishers ──────────────────────────────────────────────────────
-        self.pose_pub   = self.create_publisher(PoseStamped, '/vslam/pose',   10)
-        self.odom_pub   = self.create_publisher(Odometry,    '/vslam/odom',   10)
-        self.vgps_pub   = self.create_publisher(NavSatFix,   '/vslam/gps',    10)
-        self.map_pub    = self.create_publisher(PointCloud2, '/vslam/map',    10)
-        self.status_pub = self.create_publisher(String,      '/vslam/status', 10)
+        self.pose_pub   = self.create_publisher(PoseStamped, 'vslam/pose',   10)
+        self.odom_pub   = self.create_publisher(Odometry,    'vslam/odom',   10)
+        self.vgps_pub   = self.create_publisher(NavSatFix,   'vslam/gps',    10)
+        self.map_pub    = self.create_publisher(PointCloud2, 'vslam/map',    10)
+        self.status_pub = self.create_publisher(String,      'vslam/status', 10)
 
         # ── TF broadcaster ──────────────────────────────────────────────────
         self.tf_br = tf2_ros.TransformBroadcaster(self)

@@ -13,7 +13,7 @@ python3 ros_ws/bridges/sim_bridge.py
 
 **Stream**
 ```
-cd ~/Desktop/Autonomous-Drone/ros_ws/bridges
+cd ros_ws/src/autonomous_drone/autonomous_drone/bridges
 python3 udp_custom_receiver.py --ros-args -p port:=5005
 ```
 

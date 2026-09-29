@@ -8,8 +8,9 @@ echo "  Building Autonomous Drone ROS2 Package"
 echo "=========================================="
 echo ""
 
-# Navigate to workspace root
-cd ~/Desktop/Autonomous-Drone/ros_ws
+# Navigate to workspace root regardless of where the repository is cloned.
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+cd "$SCRIPT_DIR"
 
 # Check if src exists
 if [ ! -d "src" ]; then
@@ -24,7 +25,7 @@ source /opt/ros/jazzy/setup.bash
 # Build the package
 echo ""
 echo "Building package from workspace root..."
-colcon build --packages-select autonomous_drone
+colcon build --packages-select autonomous_drone --symlink-install
 
 if [ $? -eq 0 ]; then
     echo ""
@@ -33,7 +34,7 @@ if [ $? -eq 0 ]; then
     echo "=========================================="
     echo ""
     echo "To use the package, run:"
-    echo "  source ~/Desktop/Autonomous-Drone/ros_ws/install/setup.bash"
+    echo "  source $SCRIPT_DIR/install/setup.bash"
     echo ""
     echo "Then launch with:"
     echo "  Simulation: ros2 launch autonomous_drone autonomous_drone_sim.launch.py"
