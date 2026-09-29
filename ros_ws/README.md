@@ -58,6 +58,21 @@ ros2 run autonomous_drone object_avoidance
 ros2 run autonomous_drone object_following
 ```
 
+**Run experimental RGB-D visual odometry:**
+```bash
+ros2 run autonomous_drone vslam_node
+```
+
+The node publishes `vslam/pose`, `vslam/odom`, and `vslam/map`. Loop correction
+and virtual GPS are intentionally off by default because they have not been
+validated for flight control. They can be enabled explicitly for experiments:
+
+```bash
+ros2 run autonomous_drone vslam_node --ros-args \
+  -p enable_loop_closure:=true \
+  -p enable_virtual_gps:=true
+```
+
 **Run autonomous drone interface:**
 ```bash
 ros2 run autonomous_drone node_interface

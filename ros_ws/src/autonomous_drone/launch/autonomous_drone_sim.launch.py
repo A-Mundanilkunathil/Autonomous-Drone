@@ -23,7 +23,10 @@ def generate_launch_description():
             name='sim_bridge',
             namespace=namespace,
             output='screen',
-            parameters=[{'use_sim_time': use_sim_time}],
+            parameters=[
+                {'calibration_path': calib_path},
+                {'use_sim_time': use_sim_time},
+            ],
         ),
         
         # Object detector (YOLO)
@@ -43,7 +46,7 @@ def generate_launch_description():
             name='object_avoidance',
             namespace=namespace,
             output='screen',
-            parameters=[{'midas_calib_npz': calib_path}, {'use_sim_time': use_sim_time}]
+            parameters=[{'use_sim_time': use_sim_time}]
         ),
         
         # Object following with tracking
@@ -53,7 +56,7 @@ def generate_launch_description():
             name='object_following',
             namespace=namespace,
             output='screen',
-            parameters=[{'midas_calib_npz': calib_path}, {'use_sim_time': use_sim_time}]
+            parameters=[{'use_sim_time': use_sim_time}]
         ),
         
         # VSLAM — visual odometry, sparse map, and virtual GPS

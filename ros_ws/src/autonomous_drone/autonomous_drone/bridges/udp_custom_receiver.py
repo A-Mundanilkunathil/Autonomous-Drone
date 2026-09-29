@@ -39,6 +39,8 @@ class UdpFrameReceiver(Node):
         # MiDaS depth calibration 
         self.midas_scale = 140.0  
         self.midas_shift = 0.13  
+        self.depth_calibration_path = self.declare_parameter(
+            'depth_calibration_path', '').value
         self._load_midas_calibration()
 
         # Parameters
@@ -140,8 +142,11 @@ class UdpFrameReceiver(Node):
     def _load_midas_calibration(self):
         """Load MiDaS calibration from .npz file for metric depth conversion"""
         try:
-            pkg_share = get_package_share_directory('autonomous_drone')
-            calib_path = os.path.join(pkg_share, 'config', 'esp32_midas_calibration.npz')
+            calib_path = self.depth_calibration_path
+            if not calib_path:
+                pkg_share = get_package_share_directory('autonomous_drone')
+                calib_path = os.path.join(
+                    pkg_share, 'config', 'esp32_midas_calibration.npz')
             
             if os.path.exists(calib_path):
                 calib = np.load(calib_path)

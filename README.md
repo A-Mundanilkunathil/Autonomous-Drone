@@ -78,12 +78,13 @@ cd ros_ws
 
 ### 3. Running Tests
 
-The default automated suite contains ROS-independent control and safety tests and
+The default automated suite contains ROS-independent control, safety, and vision
+geometry tests and
 does not communicate with flight hardware:
 
 ```bash
 PYTHONPATH=ros_ws/src/autonomous_drone \
-  python -m unittest discover -s ros_ws/src/autonomous_drone/test -v
+  python -m pytest -q ros_ws/src/autonomous_drone/test
 ```
 
 Install `requirements-dev.txt` to run the same suite through pytest. Hardware and
@@ -109,6 +110,12 @@ ROS runtime.
 All application topics are relative so a complete stack can run under a ROS
 namespace. Simulator-owned topics, such as the Gazebo camera input, are supplied
 as parameters or remappings.
+
+The `vslam_node` executable currently provides experimental RGB-D visual
+odometry and a sparse map. RGB and depth are paired by their source timestamp,
+and metric motion is estimated with PnP. Experimental loop correction and
+virtual-GPS output are disabled by default; neither should be enabled for flight
+control until validated against recorded ground truth.
 
 ## Hardware Configuration
 [Connect ESCs and Motors](https://ardupilot.org/copter/docs/connect-escs-and-motors.html)

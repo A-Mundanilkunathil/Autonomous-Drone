@@ -6,7 +6,7 @@ from std_msgs.msg import Float32
 from cv_bridge import CvBridge
 import numpy as np
 from geometry_msgs.msg import TwistStamped
-import cv2
+from autonomous_drone.core.vision import conservative_depth_percentile
 
 class ObjectAvoidanceNode(Node):
     def __init__(self):
@@ -18,6 +18,8 @@ class ObjectAvoidanceNode(Node):
         self.stop_dist_m = 0.5
         self.caution_dist_m = 0.8
         self.min_roi_pixels = 150
+        self.min_valid_fraction = float(self.declare_parameter(
+            'min_valid_depth_fraction', 0.10).value)
         self.smoothing = 0.6
         
         # QoS profiles
@@ -77,9 +79,10 @@ class ObjectAvoidanceNode(Node):
         return metric_depth.astype(np.float32)
     
     def _median_ignore_nan(self, a):
-        if a.size == 0:
+        finite = a[np.isfinite(a)]
+        if finite.size == 0:
             return np.nan
-        return np.nanmedian(a)
+        return float(np.median(finite))
     
     def _sector_scores(self, depth_img, y1, y2, x1, x2):
         roi = depth_img[y1:y2, x1:x2]
@@ -238,27 +241,25 @@ class ObjectAvoidanceNode(Node):
         
         # Get clearance for each region
         left_roi_valid = left_roi[np.isfinite(left_roi)]
-        center_third_roi_valid = center_third_roi[np.isfinite(center_third_roi)]
         right_roi_valid = right_roi[np.isfinite(right_roi)]
         
-        left_clearance = np.percentile(left_roi_valid, 20) if left_roi_valid.size > 0 else np.inf
-        center_clearance = np.percentile(center_third_roi_valid, 20) if center_third_roi_valid.size > 0 else np.inf
-        right_clearance = np.percentile(right_roi_valid, 20) if right_roi_valid.size > 0 else np.inf
-        
-        closest_forward = center_clearance
-        
-        # Check if we can navigate around obstacle
-        if center_clearance < self.caution_dist_m:
-            if left_clearance > center_clearance * 1.5 and left_clearance > self.caution_dist_m:
-                closest_forward = min(left_clearance, self.caution_dist_m * 2.0)
-            elif right_clearance > center_clearance * 1.5 and right_clearance > self.caution_dist_m:
-                closest_forward = min(right_clearance, self.caution_dist_m * 2.0)
+        left_clearance = np.percentile(left_roi_valid, 20) if left_roi_valid.size > 0 else np.nan
+        right_clearance = np.percentile(right_roi_valid, 20) if right_roi_valid.size > 0 else np.nan
+
+        # Missing depth in the forward corridor is unknown, not clear. Fail
+        # closed so a broken/degraded estimator cannot command forward flight.
+        center_clearance = conservative_depth_percentile(
+            center_third_roi,
+            min_valid_fraction=self.min_valid_fraction,
+        )
         
         # Get sector scores
         mL, mR, mT, mB = self._sector_scores(depth_img, y1_center, y2_center, x1_center, x2_center)
         
         # Generate avoidance command
-        vx, vz, wz = self._compose_cmd(closest_forward, mL, mR, mT, mB, left_clearance, right_clearance)
+        vx, vz, wz = self._compose_cmd(
+            center_clearance, mL, mR, mT, mB,
+            left_clearance, right_clearance)
 
         # Publish velocity command
         msg = TwistStamped()
@@ -272,7 +273,7 @@ class ObjectAvoidanceNode(Node):
 
         # Publish forward clearance
         clearance_msg = Float32()
-        clearance_msg.data = float(closest_forward) if np.isfinite(closest_forward) else float('inf')
+        clearance_msg.data = float(center_clearance)
         self.clearance_pub.publish(clearance_msg)
 
 def main(args=None):

@@ -1,6 +1,6 @@
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
@@ -53,12 +53,16 @@ class SimBridgeNode(Node):
         # MiDaS depth calibration 
         self.midas_scale = 140.0  
         self.midas_shift = 0.13   
+        self.calibration_path = self.declare_parameter(
+            'calibration_path', '').value
         self._load_midas_calibration()
         
         camera_topic = self.declare_parameter(
             'input_camera_topic',
             '/world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image',
         ).value
+        self.camera_hfov_rad = float(
+            self.declare_parameter('camera_hfov_rad', 2.0).value)
 
         # Subscribe to Gazebo camera
         self.camera_subscription = self.create_subscription(
@@ -70,6 +74,8 @@ class SimBridgeNode(Node):
         # Publishers
         self.camera_publisher = self.create_publisher(Image, 'camera/image_raw', 10)
         self.depth_publisher = self.create_publisher(Image, 'camera/depth_map', 10)
+        self.camera_info_publisher = self.create_publisher(
+            CameraInfo, 'camera/camera_info', 10)
         self.bridge = CvBridge()
 
         # Background depth processing
@@ -83,8 +89,11 @@ class SimBridgeNode(Node):
     def _load_midas_calibration(self):
         """Load MiDaS calibration from .npz file for metric depth conversion"""
         try:
-            pkg_share = get_package_share_directory('autonomous_drone')
-            calib_path = os.path.join(pkg_share, 'config', 'esp32_midas_calibration.npz')
+            calib_path = self.calibration_path
+            if not calib_path:
+                pkg_share = get_package_share_directory('autonomous_drone')
+                calib_path = os.path.join(
+                    pkg_share, 'config', 'esp32_midas_calibration.npz')
             
             if os.path.exists(calib_path):
                 calib = np.load(calib_path)
@@ -114,6 +123,7 @@ class SimBridgeNode(Node):
         try:
             # Forward raw image immediately
             self.camera_publisher.publish(msg)
+            self.camera_info_publisher.publish(self._make_camera_info(msg))
             
             # Convert to OpenCV for depth processing
             frame_bgr = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
@@ -132,6 +142,30 @@ class SimBridgeNode(Node):
                 
         except Exception as e:
             self.get_logger().error(f'Error in camera callback: {e}')
+
+    def _make_camera_info(self, image: Image) -> CameraInfo:
+        """Build pinhole intrinsics from Gazebo's configured horizontal FOV."""
+        width = int(image.width)
+        height = int(image.height)
+        fx = width / (2.0 * np.tan(self.camera_hfov_rad / 2.0))
+        fy = fx
+        cx = width / 2.0
+        cy = height / 2.0
+
+        info = CameraInfo()
+        info.header = image.header
+        info.width = width
+        info.height = height
+        info.distortion_model = 'plumb_bob'
+        info.d = [0.0] * 5
+        info.k = [fx, 0.0, cx, 0.0, fy, cy, 0.0, 0.0, 1.0]
+        info.r = [1.0, 0.0, 0.0,
+                  0.0, 1.0, 0.0,
+                  0.0, 0.0, 1.0]
+        info.p = [fx, 0.0, cx, 0.0,
+                  0.0, fy, cy, 0.0,
+                  0.0, 0.0, 1.0, 0.0]
+        return info
 
     def _depth_worker(self):
         """Background thread for MiDaS depth estimation"""

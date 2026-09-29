@@ -27,6 +27,7 @@ def generate_launch_description():
             output='screen',
             parameters=[
                 {'calib_npz': camera_calib_path},
+                {'depth_calibration_path': midas_calib_path},
                 {'port': 5005},
                 {'expected_width': 640},
                 {'expected_height': 480}
@@ -48,8 +49,7 @@ def generate_launch_description():
             executable='object_avoidance',
             name='object_avoidance',
             namespace=namespace,
-            output='screen',
-            parameters=[{'midas_calib_npz': midas_calib_path}]
+            output='screen'
         ),
         
         # Object following with tracking
@@ -58,8 +58,7 @@ def generate_launch_description():
             executable='object_following',
             name='object_following',
             namespace=namespace,
-            output='screen',
-            parameters=[{'midas_calib_npz': midas_calib_path}]
+            output='screen'
         ),
         
         # VSLAM — visual odometry, sparse map, and virtual GPS

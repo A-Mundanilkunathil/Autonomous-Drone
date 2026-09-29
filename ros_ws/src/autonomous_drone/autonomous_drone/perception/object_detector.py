@@ -5,7 +5,6 @@ from sensor_msgs.msg import Image
 from vision_msgs.msg import Detection2D, Detection2DArray, ObjectHypothesisWithPose
 from cv_bridge import CvBridge
 from ultralytics import YOLO
-import cv2
 
 class ObjectDetectorNode(Node):
     def __init__(self):
@@ -18,7 +17,9 @@ class ObjectDetectorNode(Node):
         qos_profile = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=5
+            # Inference is slower than the camera. Keeping only the newest
+            # frame prevents seconds of stale detections from accumulating.
+            depth=1
         )
 
         # Subscribe to camera
@@ -44,16 +45,21 @@ class ObjectDetectorNode(Node):
         self.confidence_threshold = float(
             self.declare_parameter('confidence_threshold', 0.25).value
         )
+        self.max_detections = int(
+            self.declare_parameter('max_detections', 50).value
+        )
 
         # Load detection model
         self.detector = self.load_model()
+        if self.detector is None:
+            raise RuntimeError(f'Unable to load detector model: {self.model_path}')
 
     def load_model(self):
         # Load YOLOv8s model
         try:
             model = YOLO(self.model_path)
 
-            self.get_logger().info('Loaded YOLOv8s model')
+            self.get_logger().info(f'Loaded detector model: {self.model_path}')
             return model
         except Exception as e:
             self.get_logger().error(f'Failed to load YOLOv8s model: {e}')
@@ -71,20 +77,30 @@ class ObjectDetectorNode(Node):
             self.get_logger().error(f'Failed to convert ROS image to OpenCV: {e}')
             return
 
-        if not self.detector:
-            self.get_logger().error('Detector not initialized')
-            return
-        
         self.frame_count += 1
-        
-        # Run detection
-        results = self.detector.predict(
-            cv_image, conf=self.confidence_threshold, verbose=False
-        )
 
         # Convert results to ROS messages
         detection_array_msg = Detection2DArray()
         detection_array_msg.header = msg.header
+
+        try:
+            results = self.detector.predict(
+                cv_image,
+                conf=self.confidence_threshold,
+                max_det=self.max_detections,
+                verbose=False,
+            )
+        except Exception as e:
+            # Publish an empty, correctly stamped result so consumers can
+            # immediately age out an old target instead of flying on stale data.
+            self.get_logger().error(
+                f'Detector inference failed: {e}', throttle_duration_sec=2.0)
+            self.detection_pub.publish(detection_array_msg)
+            return
+
+        if not results:
+            self.detection_pub.publish(detection_array_msg)
+            return
 
         # Iterate over detected objects
         for box in results[0].boxes:
@@ -102,7 +118,10 @@ class ObjectDetectorNode(Node):
             hypothesis = ObjectHypothesisWithPose()
             # Get class name from model's names dictionary
             class_idx = int(box.cls[0])
-            class_name = self.detector.names.get(class_idx, str(class_idx))
+            names = self.detector.names
+            class_name = (names.get(class_idx, str(class_idx))
+                          if isinstance(names, dict)
+                          else names[class_idx])
             hypothesis.hypothesis.class_id = class_name
             hypothesis.hypothesis.score = float(box.conf[0])
             det.results.append(hypothesis)

@@ -10,7 +10,8 @@ import cv2
 import numpy as np
 import tf2_ros
 import math
-from collections import deque
+from collections import OrderedDict, deque
+from autonomous_drone.core.vision import estimate_rgbd_transform
 
 
 METERS_PER_DEG_LAT = 111319.9  # metres per degree of latitude (WGS-84)
@@ -18,22 +19,23 @@ METERS_PER_DEG_LAT = 111319.9  # metres per degree of latitude (WGS-84)
 
 class KeyFrame:
     """Lightweight container for a SLAM keyframe."""
-    __slots__ = ['id', 'kp', 'des', 'pose']
+    __slots__ = ['id', 'kp', 'des', 'pose', 'depth']
 
-    def __init__(self, kf_id: int, kp, des, pose: np.ndarray):
+    def __init__(self, kf_id: int, kp, des, pose: np.ndarray, depth: np.ndarray):
         self.id   = kf_id
         self.kp   = kp
         self.des  = des
         self.pose = pose.copy()   # 4x4 camera-to-world transform
+        self.depth = depth.copy()
 
 
 class VSLAMNode(Node):
     """
-    Visual SLAM node with:
-      - ORB feature-based visual odometry (keyframe-to-keyframe)
-      - Depth-scale recovery via depth image
+    Experimental RGB-D visual odometry node with:
+      - Timestamp-paired RGB and metric-depth processing
+      - ORB feature matching and metric PnP motion estimation
       - Sparse 3D map accumulation (PointCloud2 on /vslam/map)
-      - Lightweight loop-closure with linear pose-graph correction
+      - Optional experimental loop-closure correction
       - Virtual GPS: converts VSLAM pose → NavSatFix using an initial
         GPS anchor + compass heading (/vslam/gps)
 
@@ -59,11 +61,23 @@ class VSLAMNode(Node):
 
         self.bridge = CvBridge()
 
+        self.enable_loop_closure = bool(
+            self.declare_parameter('enable_loop_closure', False).value)
+        self.enable_virtual_gps = bool(
+            self.declare_parameter('enable_virtual_gps', False).value)
+        self.max_pending_frames = int(
+            self.declare_parameter('max_pending_frames', 120).value)
+        self.min_pnp_inliers = int(
+            self.declare_parameter('min_pnp_inliers', 8).value)
+        self.max_frame_translation_m = float(
+            self.declare_parameter('max_frame_translation_m', 2.0).value)
+
         # ── Camera intrinsics ────────────────────────────────────────────────
         self.fx = 600.0
         self.fy = 600.0
         self.cx = 320.0
         self.cy = 240.0
+        self.dist_coeffs = np.zeros((5, 1), dtype=np.float64)
 
         # ── Feature detector / matchers ─────────────────────────────────────
         self.orb      = cv2.ORB_create(nfeatures=500)
@@ -73,12 +87,14 @@ class VSLAMNode(Node):
         # ── Pose state ───────────────────────────────────────────────────────
         self.pose        = np.eye(4)   # camera-to-world transform
         self.frame_count = 0
+        self._last_inlier_count = 0
 
         # ── Active keyframe (VO reference) ───────────────────────────────────
         self.kf_image       = None
         self.kf_kp          = None
         self.kf_des         = None
         self.kf_pose        = np.eye(4)
+        self.kf_depth       = None
         self.frames_since_kf = 0
         self.kf_count        = 0
 
@@ -113,7 +129,7 @@ class VSLAMNode(Node):
         qos_be = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=5)
+            depth=1)
 
         # ── Subscribers ─────────────────────────────────────────────────────
         self.create_subscription(
@@ -142,13 +158,19 @@ class VSLAMNode(Node):
         # ── TF broadcaster ──────────────────────────────────────────────────
         self.tf_br = tf2_ros.TransformBroadcaster(self)
 
-        # ── Depth buffer ─────────────────────────────────────────────────────
-        self.current_depth = None
+        # Pair RGB and depth by source timestamp. Both camera bridges preserve
+        # the RGB stamp on the generated depth image, so stale frames are never
+        # mixed into a metric pose estimate.
+        self._pending_images = OrderedDict()
+        self._pending_depths = OrderedDict()
 
         # Map published on a timer so we don't flood the bus every frame
         self.create_timer(2.0, self._map_timer_cb)
 
-        self.get_logger().info('VSLAM Node ready (map + virtual GPS)')
+        self.get_logger().info(
+            'RGB-D visual odometry ready '
+            f'(loop_closure={self.enable_loop_closure}, '
+            f'virtual_gps={self.enable_virtual_gps})')
 
     # =========================================================================
     # Sensor callbacks
@@ -156,22 +178,32 @@ class VSLAMNode(Node):
 
     def _caminfo_cb(self, msg: CameraInfo):
         K = np.array(msg.k).reshape(3, 3)
+        if K[0, 0] <= 0.0 or K[1, 1] <= 0.0:
+            self.get_logger().warn('Ignoring invalid camera intrinsics')
+            return
         self.fx, self.fy = K[0, 0], K[1, 1]
         self.cx, self.cy = K[0, 2], K[1, 2]
+        if msg.d:
+            self.dist_coeffs = np.asarray(msg.d, dtype=np.float64).reshape(-1, 1)
 
     def _depth_cb(self, msg: Image):
         try:
-            self.current_depth = self.bridge.imgmsg_to_cv2(
-                msg, desired_encoding='32FC1')
+            depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
         except Exception as e:
             self.get_logger().warn(f'Depth conversion error: {e}')
+            return
+        key = self._stamp_ns(msg.header.stamp)
+        self._pending_depths[key] = (depth, msg.header.stamp)
+        self._trim_pending(self._pending_depths)
+        self._process_pair(key)
 
     def _gps_cb(self, msg: NavSatFix):
         """Cache latest GPS fix; try to set anchor once VSLAM is warm."""
         if msg.status.status < 0:
             return
         self._pending_gps = msg
-        if not self.gps_ready and self.frame_count > 10:
+        if (self.enable_virtual_gps and not self.gps_ready
+                and self.frame_count > 10 and self._hdg_set):
             self._init_gps(msg)
 
     def _hdg_cb(self, msg: Float64):
@@ -187,25 +219,62 @@ class VSLAMNode(Node):
     # =========================================================================
 
     def _img_cb(self, msg: Image):
-        """Process one camera frame through the visual-odometry pipeline."""
+        """Cache an RGB frame until depth with the same source stamp arrives."""
         try:
             frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='mono8')
         except Exception as e:
             self.get_logger().error(f'Image conversion error: {e}')
             return
+        key = self._stamp_ns(msg.header.stamp)
+        self._pending_images[key] = (frame, msg.header.stamp)
+        self._trim_pending(self._pending_images)
+        self._process_pair(key)
+
+    @staticmethod
+    def _stamp_ns(stamp) -> int:
+        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
+
+    def _trim_pending(self, pending: OrderedDict):
+        while len(pending) > self.max_pending_frames:
+            pending.popitem(last=False)
+
+    def _process_pair(self, key: int):
+        image_item = self._pending_images.get(key)
+        depth_item = self._pending_depths.get(key)
+        if image_item is None or depth_item is None:
+            return
+        frame, stamp = self._pending_images.pop(key)
+        depth, _ = self._pending_depths.pop(key)
+        if frame.shape[:2] != depth.shape[:2]:
+            self.get_logger().warn('Dropping RGB/depth pair with mismatched dimensions')
+            return
+        self._process_frame(frame, depth, stamp)
+
+    def _process_frame(self, frame: np.ndarray, depth: np.ndarray, stamp):
+        """Process one synchronized RGB-D frame through visual odometry."""
 
         self.frame_count     += 1
         self.frames_since_kf += 1
 
         kp, des = self.orb.detectAndCompute(frame, None)
 
-        # First frame — just register as keyframe, nothing to match against
-        if self.kf_image is None or self.kf_des is None or des is None:
-            self._register_keyframe(frame, kp, des, self.pose.copy())
+        if des is None or kp is None or len(kp) < self.min_pnp_inliers:
+            self.get_logger().warn(
+                'RGB-D frame has too few visual features',
+                throttle_duration_sec=2.0)
+            return
+
+        # First usable frame — register it as the tracking keyframe.
+        if self.kf_image is None or self.kf_des is None:
+            self._register_keyframe(frame, depth, kp, des, self.pose.copy())
             return
 
         # ── Match against active keyframe ────────────────────────────────────
-        matches = self.bf_cross.match(self.kf_des, des)
+        try:
+            matches = self.bf_cross.match(self.kf_des, des)
+        except cv2.error as exc:
+            self.get_logger().warn(f'Feature matching failed: {exc}')
+            return
         matches = sorted(matches, key=lambda m: m.distance)[:100]
         if len(matches) < 8:
             self.get_logger().warn('Too few matches for pose estimation')
@@ -223,91 +292,104 @@ class VSLAMNode(Node):
                           [0,       self.fy, self.cy],
                           [0,       0,       1      ]])
 
-        E, mask = cv2.findEssentialMat(
-            pts1, pts2, K_mat,
-            method=cv2.RANSAC, prob=0.999, threshold=1.0)
-        if E is None:
+        transform, inlier_count = self._estimate_rgbd_transform(
+            pts1, pts2, self.kf_depth, K_mat)
+        if transform is None:
+            self.get_logger().warn(
+                'RGB-D pose rejected: insufficient geometrically consistent matches',
+                throttle_duration_sec=2.0)
             return
+        self._last_inlier_count = inlier_count
 
-        _, R, t, mask = cv2.recoverPose(E, pts1, pts2, K_mat)
-
-        scale = (self._estimate_scale(pts1, pts2, mask)
-                 if self.current_depth is not None else 1.0)
-
-        T = np.eye(4)
-        T[:3, :3] = R
-        T[:3, 3]  = (t * scale).flatten()
+        T = transform
+        R = T[:3, :3]
+        translation = T[:3, 3]
+        trans = float(np.linalg.norm(translation))
+        if not np.isfinite(trans) or trans > self.max_frame_translation_m:
+            self.get_logger().warn(
+                f'RGB-D pose rejected: implausible translation {trans:.2f} m',
+                throttle_duration_sec=2.0)
+            return
 
         # Cumulative pose: keyframe_pose × inv(T_kf_to_current)
         self.pose = self.kf_pose @ np.linalg.inv(T)
-        self._publish_pose(msg.header.stamp)
+        self._publish_pose(stamp)
 
         # ── Keyframe decision ────────────────────────────────────────────────
-        trans    = np.linalg.norm(t * scale)
         rot_deg  = (np.arccos(np.clip((np.trace(R) - 1) / 2, -1, 1))
                     * 180 / np.pi)
 
         if (trans   > self.min_trans_m or
                 rot_deg > self.min_rot_deg or
                 self.frames_since_kf >= self.max_frames_no_kf):
-            self._register_keyframe(frame, kp, des, self.pose.copy())
+            self._register_keyframe(frame, depth, kp, des, self.pose.copy())
 
     # =========================================================================
     # Keyframe management & map building
     # =========================================================================
 
-    def _register_keyframe(self, frame, kp, des, pose: np.ndarray):
+    def _register_keyframe(self, frame, depth, kp, des, pose: np.ndarray):
         """Register a new keyframe, extend the 3-D map, check loop closure."""
         self.kf_image        = frame
         self.kf_kp           = kp
         self.kf_des          = des
         self.kf_pose         = pose.copy()
+        self.kf_depth        = depth.copy()
         self.frames_since_kf = 0
         self.kf_count       += 1
 
         # Lift feature pixels to 3-D world points and append to map
-        if self.current_depth is not None and kp:
-            pts3d = self._unproject(kp, pose)
+        if kp:
+            pts3d = self._unproject(kp, pose, depth)
             if len(pts3d):
                 self.map_points.extend(pts3d.tolist())
                 self._map_dirty = True
 
         # Add to KF database (used for loop closure)
-        kf = KeyFrame(self.kf_count, kp, des, pose)
+        kf = KeyFrame(self.kf_count, kp, des, pose, depth)
         self.kf_db.append(kf)
         if len(self.kf_db) > self.max_kf_db:
             self.kf_db.pop(0)
 
         # Loop-closure check
-        if des is not None and self.kf_count > self.loop_min_gap * 2:
+        if (self.enable_loop_closure and des is not None
+                and self.kf_count > self.loop_min_gap * 2):
             self._check_loop(kf)
 
         # Lazy GPS anchor init (GPS may arrive after VSLAM starts)
-        if (not self.gps_ready and
+        if (self.enable_virtual_gps and not self.gps_ready and
                 self._pending_gps is not None and
-                self.frame_count > 10):
+                self.frame_count > 10 and self._hdg_set):
             self._init_gps(self._pending_gps)
 
-    def _unproject(self, kp: list, pose: np.ndarray) -> np.ndarray:
+    def _unproject(self, kp: list, pose: np.ndarray,
+                   depth: np.ndarray) -> np.ndarray:
         """
         Back-project keypoint pixels to 3-D world coordinates using the
         current depth image.
 
         Returns (N, 3) float32 array of world-frame points.
         """
-        h, w = self.current_depth.shape
+        h, w = depth.shape
         R, t = pose[:3, :3], pose[:3, 3]
         pts  = []
-        for k in kp:
+        pixels = np.asarray([k.pt for k in kp], dtype=np.float32)
+        K_mat = np.array([[self.fx, 0.0, self.cx],
+                          [0.0, self.fy, self.cy],
+                          [0.0, 0.0, 1.0]])
+        rays = cv2.undistortPoints(
+            pixels.reshape(-1, 1, 2), K_mat,
+            self.dist_coeffs).reshape(-1, 2)
+        for k, ray in zip(kp, rays):
             u, v = int(k.pt[0]), int(k.pt[1])
             if not (0 <= u < w and 0 <= v < h):
                 continue
-            d = float(self.current_depth[v, u])
-            if not (0.2 < d < 20.0):
+            d = float(depth[v, u])
+            if not (np.isfinite(d) and 0.2 < d < 20.0):
                 continue
             # Camera-frame 3-D point
-            X = (u - self.cx) * d / self.fx
-            Y = (v - self.cy) * d / self.fy
+            X = float(ray[0]) * d
+            Y = float(ray[1]) * d
             # World-frame point
             pts.append(R @ np.array([X, Y, d]) + t)
 
@@ -315,50 +397,21 @@ class VSLAMNode(Node):
                 if pts else np.empty((0, 3), dtype=np.float32))
 
     # =========================================================================
-    # Depth-based scale estimation (unchanged from original)
+    # Metric RGB-D motion estimation
     # =========================================================================
 
-    def _estimate_scale(self, pts1, pts2, mask) -> float:
-        scales = []
-        h, w   = self.current_depth.shape
-
-        for i, (p1, p2) in enumerate(zip(pts1, pts2)):
-            if mask[i] == 0:
-                continue
-            x1, y1 = int(p1[0]), int(p1[1])
-            if not (0 <= x1 < w and 0 <= y1 < h):
-                continue
-            d1 = float(self.current_depth[y1, x1])
-            if not (0.2 < d1 < 20.0):
-                continue
-            X1 = (p1[0] - self.cx) * d1 / self.fx
-            Y1 = (p1[1] - self.cy) * d1 / self.fy
-
-            x2, y2 = int(p2[0]), int(p2[1])
-            if not (0 <= x2 < w and 0 <= y2 < h):
-                continue
-            d2 = float(self.current_depth[y2, x2])
-            if not (0.2 < d2 < 20.0):
-                continue
-            X2 = (p2[0] - self.cx) * d2 / self.fx
-            Y2 = (p2[1] - self.cy) * d2 / self.fy
-
-            dist = math.sqrt((X2-X1)**2 + (Y2-Y1)**2 + (d2-d1)**2)
-            if dist > 0.01:
-                scales.append(dist)
-
-        if len(scales) < 5:
-            return 1.0
-
-        a   = np.array(scales)
-        med = float(np.median(a))
-        mad = float(np.median(np.abs(a - med)))
-
-        if mad < 1e-6:
-            return med
-
-        inliers = a[np.abs(a - med) < 2.5 * mad * 1.4826]
-        return float(np.mean(inliers)) if len(inliers) > 3 else med
+    def _estimate_rgbd_transform(self, pts1, pts2, keyframe_depth, K_mat):
+        """Estimate keyframe→current metric transform with RGB-D PnP."""
+        if keyframe_depth is None:
+            return None, 0
+        return estimate_rgbd_transform(
+            pts1,
+            pts2,
+            keyframe_depth,
+            K_mat,
+            self.dist_coeffs,
+            min_inliers=self.min_pnp_inliers,
+        )
 
     # =========================================================================
     # Loop-closure (lightweight bag-of-features)
@@ -547,7 +600,9 @@ class VSLAMNode(Node):
         odom = Odometry()
         odom.header.stamp       = stamp
         odom.header.frame_id    = 'odom'
-        odom.child_frame_id     = 'base_link'
+        # This pose belongs to the camera/VO frame. Publishing it as base_link
+        # would silently ignore the camera-to-body extrinsic transform.
+        odom.child_frame_id     = 'vslam_link'
         odom.pose.pose          = pose_msg.pose
         self.odom_pub.publish(odom)
 
@@ -569,6 +624,7 @@ class VSLAMNode(Node):
         # ── Status log ───────────────────────────────────────────────────────
         if self.frame_count % 60 == 0:
             s = (f'frames={self.frame_count} kf={self.kf_count} '
+                 f'inliers={self._last_inlier_count} '
                  f'map={len(self.map_points)} loops={self.loop_count} '
                  f'vgps={self.gps_ready}')
             self.get_logger().info(f'VSLAM: {s}', throttle_duration_sec=5.0)

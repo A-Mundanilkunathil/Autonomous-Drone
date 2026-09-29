@@ -4,10 +4,11 @@ from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
 from vision_msgs.msg import Detection2DArray
 from geometry_msgs.msg import TwistStamped
 from std_msgs.msg import Bool, Float32
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 from cv_bridge import CvBridge
 import math
 import numpy as np
+from collections import OrderedDict
 from autonomous_drone.core.control import body_tracking_corrections, damped_distance_speed
 
 class ObjectFollowingNode(Node):
@@ -16,7 +17,10 @@ class ObjectFollowingNode(Node):
         self.bridge = CvBridge()
 
         # Following parameters
-        self.follow_target_label = 'person'
+        self.follow_target_label = self.declare_parameter(
+            'target_label', 'person').value
+        self.min_detection_score = float(self.declare_parameter(
+            'min_detection_score', 0.35).value)
         self.follow_desired_area = 0.06  # Target area for 3-4m distance (fallback)
         self.follow_desired_distance = 3.0  # meters
         self.follow_area_band = 0.02  # Deadband to prevent jitter
@@ -29,7 +33,10 @@ class ObjectFollowingNode(Node):
         self.follow_vy_cap = 0.7  # m/s
         self.follow_vz_cap = 0.6  # m/s
         self.follow_yaw_cap = 1.4  # rad/s
-        self.follow_lost_timeout = 20.0  # Accommodate slow inference
+        self.follow_lost_timeout = float(self.declare_parameter(
+            'detection_timeout_s', 0.75).value)
+        self.depth_timeout = float(self.declare_parameter(
+            'depth_timeout_s', 0.5).value)
         self.follow_min_vx = 0.05  # Prevent stalling
         self.search_yaw_rate = 0.17  # rad/s (search behavior)
         
@@ -39,12 +46,13 @@ class ObjectFollowingNode(Node):
 
         # Detection tracking
         self._last_det_time = None
+        self._last_det_stamp_ns = None
         self._last_det_bbox = None
         self._last_det_score = 0.0
         
         # Distance tracking for PD control
-        self._latest_depth_map = None
-        self._depth_timestamp = 0.0
+        self._depth_frames = OrderedDict()
+        self._max_depth_frames = 30
         self._prev_distance = None
         self._prev_distance_time = None
         
@@ -83,6 +91,15 @@ class ObjectFollowingNode(Node):
             self._depth_callback,
             qos_profile=qos_input
         )
+
+        # CameraInfo is preferred, while the image metadata subscription keeps
+        # normalization correct for bridges that do not publish CameraInfo.
+        self.camera_info_sub = self.create_subscription(
+            CameraInfo, 'camera/camera_info', self._camera_info_callback,
+            qos_profile=qos_input)
+        self.image_metadata_sub = self.create_subscription(
+            Image, 'camera/image_raw', self._image_metadata_callback,
+            qos_profile=qos_input)
         
         # Subscribe to forward clearance for dynamic setpoint
         self.clearance_sub = self.create_subscription(
@@ -109,10 +126,24 @@ class ObjectFollowingNode(Node):
     def _depth_callback(self, msg: Image):
         """Store latest depth map for distance estimation"""
         try:
-            self._latest_depth_map = msg
-            self._depth_timestamp = self._now_seconds()
+            depth = self.bridge.imgmsg_to_cv2(msg, desired_encoding='32FC1')
+            key = self._stamp_ns(msg.header.stamp)
+            self._depth_frames[key] = (
+                depth, self._message_time_or_now(msg.header.stamp))
+            while len(self._depth_frames) > self._max_depth_frames:
+                self._depth_frames.popitem(last=False)
         except Exception as e:
             self.get_logger().warn(f'Depth callback error: {e}')
+
+    def _camera_info_callback(self, msg: CameraInfo):
+        if msg.width > 0 and msg.height > 0:
+            self.img_width = int(msg.width)
+            self.img_height = int(msg.height)
+
+    def _image_metadata_callback(self, msg: Image):
+        if msg.width > 0 and msg.height > 0:
+            self.img_width = int(msg.width)
+            self.img_height = int(msg.height)
     
     def _clearance_callback(self, msg: Float32):
         """Store forward clearance for dynamic setpoint adjustment"""
@@ -137,7 +168,9 @@ class ObjectFollowingNode(Node):
             cls = getattr(hyp, "class_id", "")
             score = float(getattr(hyp, "score", 0.0))
             
-            if cls == self.follow_target_label and score > best_score:
+            if (cls == self.follow_target_label
+                    and score >= self.min_detection_score
+                    and score > best_score):
                 cx = det.bbox.center.position.x
                 cy = det.bbox.center.position.y
                 bw = det.bbox.size_x
@@ -149,7 +182,8 @@ class ObjectFollowingNode(Node):
         if best is not None:
             self._last_det_bbox = best
             self._last_det_score = best_score
-            self._last_det_time = self._now_seconds()
+            self._last_det_time = self._message_time_or_now(msg.header.stamp)
+            self._last_det_stamp_ns = self._stamp_ns(msg.header.stamp)
 
     def _has_fresh_detection(self) -> bool:
         if self._last_det_bbox is None or self._last_det_time is None:
@@ -174,13 +208,16 @@ class ObjectFollowingNode(Node):
     
     def _get_depth_at_bbox(self, cx, cy, bw, bh) -> float:
         """Extract depth at bounding box center."""
-        if self._latest_depth_map is None:
+        if self._last_det_stamp_ns is None:
             return None
-        if (self._now_seconds() - self._depth_timestamp) > 0.5:
+        depth_item = self._depth_frames.get(self._last_det_stamp_ns)
+        if depth_item is None:
+            return None
+        depth_array, depth_timestamp = depth_item
+        if (self._now_seconds() - depth_timestamp) > self.depth_timeout:
             return None
             
         try:
-            depth_array = self.bridge.imgmsg_to_cv2(self._latest_depth_map, desired_encoding='32FC1')
             height, width = depth_array.shape[:2]
             
             # Convert bbox center to pixel coordinates
@@ -309,6 +346,14 @@ class ObjectFollowingNode(Node):
 
     def _now_seconds(self) -> float:
         return self.get_clock().now().nanoseconds / 1_000_000_000.0
+
+    def _message_time_or_now(self, stamp) -> float:
+        value = float(stamp.sec) + float(stamp.nanosec) / 1_000_000_000.0
+        return value if value > 0.0 else self._now_seconds()
+
+    @staticmethod
+    def _stamp_ns(stamp) -> int:
+        return int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec)
 
     def _publish_follow_cmd(self):
         """Publish velocity commands and target status"""
