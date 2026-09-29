@@ -6,7 +6,11 @@ from std_msgs.msg import Float32
 from cv_bridge import CvBridge
 import numpy as np
 from geometry_msgs.msg import TwistStamped
-from autonomous_drone.core.vision import conservative_depth_percentile
+from autonomous_drone.core.safety import avoidance_yaw_rate
+from autonomous_drone.core.vision import (
+    conservative_depth_percentile,
+    sanitize_metric_depth,
+)
 
 class ObjectAvoidanceNode(Node):
     def __init__(self):
@@ -15,18 +19,27 @@ class ObjectAvoidanceNode(Node):
         self.max_dist_m = 50.0  # meters
 
         # Avoidance configurations
-        self.stop_dist_m = 0.5
-        self.caution_dist_m = 0.8
+        self.stop_dist_m = float(self.declare_parameter(
+            'stop_distance_m', 0.5).value)
+        self.caution_dist_m = float(self.declare_parameter(
+            'caution_distance_m', 0.8).value)
+        if self.stop_dist_m < 0.0 or self.caution_dist_m <= self.stop_dist_m:
+            raise ValueError('caution_distance_m must exceed stop_distance_m >= 0')
         self.min_roi_pixels = 150
         self.min_valid_fraction = float(self.declare_parameter(
             'min_valid_depth_fraction', 0.10).value)
-        self.smoothing = 0.6
+        self.smoothing = float(self.declare_parameter(
+            'command_smoothing', 0.6).value)
+        self.turn_margin_m = float(self.declare_parameter(
+            'turn_margin_m', 0.2).value)
+        self.preferred_turn = int(self.declare_parameter(
+            'preferred_turn', 1).value)
         
         # QoS profiles
         qos_input = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
             history=QoSHistoryPolicy.KEEP_LAST,
-            depth=5
+            depth=1
         )
         
         qos_output = QoSProfile(
@@ -53,13 +66,14 @@ class ObjectAvoidanceNode(Node):
         self._last_vz = 0.0
         
         # Speed limits
-        self.max_forward_speed = 0.5
-        self.max_yaw_rate = 0.5  # rad/s
+        self.max_yaw_rate = float(self.declare_parameter(
+            'max_yaw_rate_rps', 0.5).value)
 
         # Timer-based control
-        self._latest_depth_msg = None
-        self._last_depth_received_time = 0.0
-        self._depth_timeout = 0.5
+        self._latest_depth_img = None
+        self._latest_depth_time = None
+        self._depth_timeout = float(self.declare_parameter(
+            'depth_timeout_s', 0.5).value)
         self._rate_hz = 20.0
         self._timer = self.create_timer(1.0 / self._rate_hz, self._on_timer)
 
@@ -67,16 +81,8 @@ class ObjectAvoidanceNode(Node):
     
     def _validate_depth(self, depth_img):
         """Clamp depth to valid range and mask out invalid values."""
-        # Mask out invalid depths (too close or invalid)
-        ignore_mask = depth_img < 0.1
-        
-        # Clamp to valid range
-        metric_depth = np.clip(depth_img, 0.1, self.max_dist_m)
-        
-        # Mask ignored pixels as infinite depth
-        metric_depth[ignore_mask] = np.inf
-        
-        return metric_depth.astype(np.float32)
+        return sanitize_metric_depth(
+            depth_img, min_depth_m=0.1, max_depth_m=self.max_dist_m)
     
     def _median_ignore_nan(self, a):
         finite = a[np.isfinite(a)]
@@ -126,24 +132,16 @@ class ObjectAvoidanceNode(Node):
         else:
             L = R = -np.inf
         
-        if L > -np.inf or R > -np.inf:
-            if forward_clear_m <= self.stop_dist_m:
-                if L > R + 0.5:
-                    wz = +self.max_yaw_rate * 0.85  # Turn Left 
-                elif R > L + 0.2:
-                    wz = -self.max_yaw_rate * 0.85  # Turn Right 
-                else:
-                    wz = 0.0
-            else:
-                yaw_intensity = 1.0 - ((forward_clear_m - self.stop_dist_m) / (self.caution_dist_m - self.stop_dist_m))
-                yaw_intensity = max(0.0, min(1.0, yaw_intensity))
-
-                if L > R + 0.5:
-                    wz = +self.max_yaw_rate * yaw_intensity  # Turn Left
-                elif R > L + 0.2:
-                    wz = -self.max_yaw_rate * yaw_intensity  # Turn Right
-                else:
-                    wz = 0.0
+        wz = avoidance_yaw_rate(
+            float(forward_clear_m),
+            float(L),
+            float(R),
+            stop_distance_m=self.stop_dist_m,
+            caution_distance_m=self.caution_dist_m,
+            max_yaw_rate_rps=self.max_yaw_rate,
+            turn_margin_m=self.turn_margin_m,
+            preferred_turn=self.preferred_turn,
+        )
 
         # Vertical choice
         if not np.isnan(median_top) or not np.isnan(median_bottom):
@@ -171,34 +169,47 @@ class ObjectAvoidanceNode(Node):
 
     def depth_callback(self, depth_msg):
         """Store latest depth map."""
-        self._latest_depth_msg = depth_msg
-        self._last_depth_received_time = self.get_clock().now().nanoseconds / 1_000_000_000.0
-
-    def _on_timer(self):
-        """Process depth and publish commands at fixed rate."""
-        if self._latest_depth_msg is None:
-            return
-
-        # Check for timeout
-        now = self.get_clock().now().nanoseconds / 1_000_000_000.0
-        if now - self._last_depth_received_time > self._depth_timeout:
-            # Publish stop command
-            msg = TwistStamped()
-            msg.header.stamp = self.get_clock().now().to_msg()
-            msg.header.frame_id = 'base_link'
-            self.cmd_pub.publish(msg)
-            
-            # Publish danger clearance to force stop
-            clearance_msg = Float32()
-            clearance_msg.data = 0.0
-            self.clearance_pub.publish(clearance_msg)
-            return
-
         try:
-            depth_img_raw = self.bridge.imgmsg_to_cv2(self._latest_depth_msg, desired_encoding='32FC1')
+            depth = self.bridge.imgmsg_to_cv2(
+                depth_msg, desired_encoding='32FC1')
         except Exception as e:
             self.get_logger().warn(f'CV Bridge error: {e}')
             return
+        self._latest_depth_img = depth
+        stamp = depth_msg.header.stamp
+        source_time = float(stamp.sec) + float(stamp.nanosec) / 1_000_000_000.0
+        self._latest_depth_time = (
+            source_time if source_time > 0.0 else self._now_seconds())
+
+    def _now_seconds(self) -> float:
+        return self.get_clock().now().nanoseconds / 1_000_000_000.0
+
+    def _publish_fail_closed(self):
+        self._last_vx = 0.0
+        self._last_vz = 0.0
+        self._last_wz = 0.0
+        msg = TwistStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        self.cmd_pub.publish(msg)
+
+        clearance_msg = Float32()
+        clearance_msg.data = 0.0
+        self.clearance_pub.publish(clearance_msg)
+
+    def _on_timer(self):
+        """Process depth and publish commands at fixed rate."""
+        if self._latest_depth_img is None or self._latest_depth_time is None:
+            self._publish_fail_closed()
+            return
+
+        # Use the source timestamp, not callback arrival time. A depth model
+        # that is continuously producing old frames must still fail closed.
+        if self._now_seconds() - self._latest_depth_time > self._depth_timeout:
+            self._publish_fail_closed()
+            return
+
+        depth_img_raw = self._latest_depth_img
 
         H, W = depth_img_raw.shape[:2]
         
@@ -240,11 +251,10 @@ class ObjectAvoidanceNode(Node):
         right_roi = center_roi[:, 2*third_width:]
         
         # Get clearance for each region
-        left_roi_valid = left_roi[np.isfinite(left_roi)]
-        right_roi_valid = right_roi[np.isfinite(right_roi)]
-        
-        left_clearance = np.percentile(left_roi_valid, 20) if left_roi_valid.size > 0 else np.nan
-        right_clearance = np.percentile(right_roi_valid, 20) if right_roi_valid.size > 0 else np.nan
+        left_clearance = conservative_depth_percentile(
+            left_roi, min_valid_fraction=self.min_valid_fraction)
+        right_clearance = conservative_depth_percentile(
+            right_roi, min_valid_fraction=self.min_valid_fraction)
 
         # Missing depth in the forward corridor is unknown, not clear. Fail
         # closed so a broken/degraded estimator cannot command forward flight.

@@ -4,7 +4,20 @@ import numpy as np
 from autonomous_drone.core.vision import (
     conservative_depth_percentile,
     estimate_rgbd_transform,
+    sanitize_metric_depth,
 )
+
+
+def test_depth_sanitization_does_not_turn_infinity_into_open_space():
+    sanitized = sanitize_metric_depth(
+        np.array([[np.inf, np.nan, 0.0, 100.0]], dtype=np.float32),
+        max_depth_m=50.0,
+    )
+
+    assert np.isinf(sanitized[0, 0])
+    assert np.isinf(sanitized[0, 1])
+    assert np.isinf(sanitized[0, 2])
+    assert sanitized[0, 3] == 50.0
 
 
 def test_clearance_fails_closed_when_depth_is_sparse():

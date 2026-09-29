@@ -10,6 +10,20 @@ import cv2
 import numpy as np
 
 
+def sanitize_metric_depth(
+    depth_image: np.ndarray,
+    *,
+    min_depth_m: float = 0.1,
+    max_depth_m: float = 50.0,
+) -> np.ndarray:
+    """Clamp finite depth while preserving invalid pixels as unknown."""
+    depth = np.asarray(depth_image, dtype=np.float32)
+    sanitized = np.full(depth.shape, np.inf, dtype=np.float32)
+    valid = np.isfinite(depth) & (depth >= min_depth_m)
+    sanitized[valid] = np.clip(depth[valid], min_depth_m, max_depth_m)
+    return sanitized
+
+
 def conservative_depth_percentile(
     region: np.ndarray,
     *,

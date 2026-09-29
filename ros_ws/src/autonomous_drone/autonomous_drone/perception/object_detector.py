@@ -48,6 +48,17 @@ class ObjectDetectorNode(Node):
         self.max_detections = int(
             self.declare_parameter('max_detections', 50).value
         )
+        self.inference_image_size = int(
+            self.declare_parameter('inference_image_size', 640).value
+        )
+        self.inference_device = str(
+            self.declare_parameter('device', 'auto').value
+        )
+        self.class_ids = [int(value) for value in
+                          self.declare_parameter('class_ids', [-1]).value
+                          if int(value) >= 0]
+        if not 0.0 <= self.confidence_threshold <= 1.0:
+            raise ValueError('confidence_threshold must be between 0 and 1')
 
         # Load detection model
         self.detector = self.load_model()
@@ -84,12 +95,17 @@ class ObjectDetectorNode(Node):
         detection_array_msg.header = msg.header
 
         try:
-            results = self.detector.predict(
-                cv_image,
-                conf=self.confidence_threshold,
-                max_det=self.max_detections,
-                verbose=False,
-            )
+            options = {
+                'conf': self.confidence_threshold,
+                'max_det': self.max_detections,
+                'imgsz': self.inference_image_size,
+                'verbose': False,
+            }
+            if self.inference_device != 'auto':
+                options['device'] = self.inference_device
+            if self.class_ids:
+                options['classes'] = self.class_ids
+            results = self.detector.predict(cv_image, **options)
         except Exception as e:
             # Publish an empty, correctly stamped result so consumers can
             # immediately age out an old target instead of flying on stale data.
@@ -98,7 +114,7 @@ class ObjectDetectorNode(Node):
             self.detection_pub.publish(detection_array_msg)
             return
 
-        if not results:
+        if not results or results[0].boxes is None:
             self.detection_pub.publish(detection_array_msg)
             return
 

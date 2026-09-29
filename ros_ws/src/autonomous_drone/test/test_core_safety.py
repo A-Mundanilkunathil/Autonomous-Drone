@@ -1,6 +1,6 @@
 import unittest
 
-from autonomous_drone.core.safety import forward_speed_for_clearance
+from autonomous_drone.core.safety import avoidance_yaw_rate, forward_speed_for_clearance
 
 
 class SafetyTests(unittest.TestCase):
@@ -27,6 +27,34 @@ class SafetyTests(unittest.TestCase):
         speed = self.speed(0.65)
         self.assertGreater(speed, 0.2)
         self.assertLess(speed, 0.6)
+
+    def test_avoidance_turns_toward_clearer_side(self):
+        yaw_rate = avoidance_yaw_rate(
+            0.4, 2.0, 0.7,
+            stop_distance_m=0.5,
+            caution_distance_m=0.8,
+            max_yaw_rate_rps=0.5,
+        )
+        self.assertGreater(yaw_rate, 0.0)
+
+    def test_avoidance_uses_preference_when_open_sides_are_equal(self):
+        yaw_rate = avoidance_yaw_rate(
+            0.4, 2.0, 2.0,
+            stop_distance_m=0.5,
+            caution_distance_m=0.8,
+            max_yaw_rate_rps=0.5,
+            preferred_turn=-1,
+        )
+        self.assertLess(yaw_rate, 0.0)
+
+    def test_avoidance_does_not_turn_blindly_when_both_sides_are_blocked(self):
+        yaw_rate = avoidance_yaw_rate(
+            0.4, 0.6, 0.7,
+            stop_distance_m=0.5,
+            caution_distance_m=0.8,
+            max_yaw_rate_rps=0.5,
+        )
+        self.assertEqual(yaw_rate, 0.0)
 
 
 if __name__ == '__main__':
