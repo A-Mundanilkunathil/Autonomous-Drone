@@ -58,10 +58,10 @@ class OverlayRecorder(Node):
         # Base frame comes from the bridged Gazebo camera; overlays come from
         # the perception topics below.
         self.create_subscription(Image, camera_topic, self._on_image, qos)
-        self.create_subscription(Image, '/camera/depth_map', self._on_depth, qos)
-        self.create_subscription(Detection2DArray, '/detected_objects', self._on_det, qos)
-        self.create_subscription(Float32, '/avoidance/forward_clearance', self._on_clear, qos)
-        self.create_subscription(TwistStamped, '/avoidance/cmd_vel', self._on_cmd, qos)
+        self.create_subscription(Image, 'camera/depth_map', self._on_depth, qos)
+        self.create_subscription(Detection2DArray, 'detected_objects', self._on_det, qos)
+        self.create_subscription(Float32, 'avoidance/forward_clearance', self._on_clear, qos)
+        self.create_subscription(TwistStamped, 'avoidance/cmd_vel', self._on_cmd, qos)
 
         self.get_logger().info(f'Overlay recorder: base={camera_topic} -> {out_path} @ {fps} fps')
 

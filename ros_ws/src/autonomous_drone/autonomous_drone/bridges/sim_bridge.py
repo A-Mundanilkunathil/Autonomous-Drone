@@ -78,7 +78,7 @@ class SimBridgeNode(Node):
         self.depth_thread = threading.Thread(target=self._depth_worker, daemon=True)
         self.depth_thread.start()
 
-        self.get_logger().info('SimBridge started: publishing /camera/image_raw and /camera/depth')
+        self.get_logger().info('SimBridge started: publishing camera/image_raw and camera/depth_map')
 
     def _load_midas_calibration(self):
         """Load MiDaS calibration from .npz file for metric depth conversion"""

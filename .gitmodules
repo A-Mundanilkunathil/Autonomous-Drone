@@ -1,6 +1,7 @@
 [submodule "sim/ardupilot"]
 	path = sim/ardupilot
 	url = https://github.com/ArduPilot/ardupilot.git
+
 [submodule "sim/ardupilot_gazebo"]
 	path = sim/ardupilot_gazebo
 	url = https://github.com/ArduPilot/ardupilot_gazebo.git

@@ -11,15 +11,17 @@
 
 set -euo pipefail
 
-readonly PROJECT_ROOT="/mnt/c/Users/minhh/OneDrive/Desktop/CS/Autonomous-Drone-1"
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="${PROJECT_ROOT:-$(cd "${SCRIPT_DIR}/.." && pwd)}"
 readonly ROS_WS="${PROJECT_ROOT}/ros_ws"
 readonly SIM_DIR="${PROJECT_ROOT}/sim"
+readonly ARDUPILOT_DIR="${ARDUPILOT_DIR:-${SIM_DIR}/ardupilot}"
 readonly REC_DIR="${SIM_DIR}/recordings"
 
 # Onboard gimbal camera (gz transport). Bridged to ROS for both the recorder
 # and perception's sim_bridge; x11grab is unusable under WSLg's rootless X.
 readonly CAMERA_TOPIC="/world/iris_warehouse/model/iris_with_gimbal/model/gimbal/link/pitch_link/sensor/camera/image"
-readonly WORLD="/usr/local/share/ardupilot_gazebo/worlds/iris_warehouse.sdf"
+readonly WORLD="${WORLD:-/usr/local/share/ardupilot_gazebo/worlds/iris_warehouse.sdf}"
 readonly PERCEPTION_NODES="sim_bridge|object_detector|object_avoidance|object_following|vslam_node"
 
 TEST="${1:-gps}"
@@ -50,7 +52,7 @@ VIDEO_OUT="${REC_DIR}/${TEST}_$(date +%Y%m%d_%H%M%S).mp4"
 # ROS setup scripts reference unbound vars, so relax nounset while sourcing.
 set +u
 # shellcheck disable=SC1091
-source /opt/ros/jazzy/setup.bash
+source "${ROS_SETUP:-/opt/ros/jazzy/setup.bash}"
 # shellcheck disable=SC1091
 source "${ROS_WS}/install/setup.bash"
 # Make the isolated ML venv (torch/ultralytics/timm/transformers) importable by
@@ -158,7 +160,7 @@ fi
 # skipping -w avoids a reboot that drops the Gazebo physics link. ARMING_CHECK=0
 # lets us arm without waiting on every pre-arm check, which is fine for SITL.
 echo "=== Starting ArduPilot SITL ==="
-cd ~/sim/ardupilot
+cd "${ARDUPILOT_DIR}"
 python3 Tools/autotest/sim_vehicle.py \
     -v ArduCopter -f gazebo-iris --model JSON \
     --no-mavproxy \

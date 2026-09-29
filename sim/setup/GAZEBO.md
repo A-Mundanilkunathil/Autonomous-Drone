@@ -64,5 +64,5 @@ Tools/autotest/sim_vehicle.py -v ArduCopter -f gazebo-iris --model JSON
 
 **Launch Gazebo**
 ```
-gz sim -v4 ~/Desktop/Autonomous-Drone/sim/ardupilot_gazebo/worlds/iris_runway.sdf
+gz sim -v4 sim/ardupilot_gazebo/worlds/iris_runway.sdf
 ```

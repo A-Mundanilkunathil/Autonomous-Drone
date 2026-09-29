@@ -2,7 +2,7 @@
 
 ## Build Package
 ```bash
-cd ~/Desktop/Autonomous-Drone/ros_ws
+cd ros_ws
 colcon build --packages-select autonomous_drone --symlink-install
 source install/setup.bash
 ```
@@ -67,13 +67,13 @@ ros2 run autonomous_drone node_interface
 
 **For simulation (using launch script):**
 ```bash
-cd ~/Desktop/Autonomous-Drone/ros_ws
+cd ros_ws
 ./launch_drone.sh sim
 ```
 
 **For real hardware (using launch script):**
 ```bash
-cd ~/Desktop/Autonomous-Drone/ros_ws
+cd ros_ws
 ./launch_drone.sh hw
 ```
 
@@ -87,7 +87,7 @@ ros2 launch autonomous_drone autonomous_drone_hw.launch.py
 ```
 ## Run Tests
 ```bash
-cd ~/Desktop/Autonomous-Drone/ros_ws
+cd ros_ws
 ./run_test.sh follow       # Object following test
 ./run_test.sh avoidance    # Obstacle avoidance test
 ./run_test.sh gps          # GPS navigation test
